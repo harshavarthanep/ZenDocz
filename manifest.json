@@ -1,16 +1,25 @@
 {
   "name": "ZenDocz — Notes, Canvas & Knowledge Graph",
   "short_name": "ZenDocz",
-  "description": "A zen, distraction-free notes app with wiki-links, graph view, canvas, kanban, local AI and study mode.",
+  "description": "A zen, distraction-free notes app with wiki-links, graph view, canvas, kanban, local AI and study mode. Works fully offline.",
+  "id": "./",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "browser"],
   "orientation": "any",
   "background_color": "#191919",
   "theme_color": "#191919",
+  "categories": ["productivity", "utilities"],
+  "lang": "en",
+  "dir": "ltr",
   "icons": [
     { "src": "./icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
     { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
     { "src": "./icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "New note", "short_name": "New", "url": "./index.html?action=new", "icons": [{ "src": "./icon-192.png", "sizes": "192x192" }] },
+    { "name": "Search notes", "short_name": "Search", "url": "./index.html?action=search", "icons": [{ "src": "./icon-192.png", "sizes": "192x192" }] }
   ]
 }
