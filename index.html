@@ -2,16 +2,8 @@
 <html lang="en">
 <head> 
     <meta charset="UTF-8">
-    <!-- viewport-fit=cover is what makes env(safe-area-inset-*) resolve to
-         anything other than 0 on notched phones; the app already has 7 rules
-         relying on it. user-scalable=no was also removed: blocking pinch-zoom
-         is an accessibility failure, and the iOS focus-zoom it was there to
-         avoid is handled properly by the 16px input rule in the V11 block. -->
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="mobile-web-app-capable" content="yes">
-    <meta name="color-scheme" content="light dark">
-    <meta name="description" content="A zen, distraction-free notes app with wiki-links, graph view, canvas, kanban and study mode. Works fully offline.">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="theme-color" content="#191919">
     <!-- Theme must be applied BEFORE any CSS/CDN script paints anything, or the
@@ -51,10 +43,6 @@
 
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
-        /* The Tailwind CDN script may be blocked or offline on a cold first
-           run; without this guard the very next line throws and the whole
-           head script dies. */
-        window.tailwind = window.tailwind || {};
         tailwind.config = {
             darkMode: 'class',
             theme: {
@@ -1856,42 +1844,10 @@
         </div>
     </div>
 
-    <!-- If any of these fail (blocked network, offline first run, CDN outage)
-         the app used to throw on the first Quill.import() and show a blank
-         page with no explanation. zdBootGuard below turns that into a clear,
-         actionable message. -->
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
-    <!-- quill.min.js, not quill.js: identical library, 215 KB instead of 437 KB. -->
-    <script src="https://cdn.quilljs.com/1.3.6/quill.min.js"></script>
-    <script>
-    /* ============================================================
-       BOOT GUARD
-       The app depends on three third-party scripts. If one of them does not
-       arrive, the old behaviour was an uncaught throw and a blank white page.
-       Tell the person what happened and give them a way forward.
-    ============================================================ */
-    (function zdBootGuard() {
-        const missing = [];
-        if (typeof Quill === 'undefined') missing.push('the text editor');
-        if (typeof firebase === 'undefined') missing.push('the sync library');
-        if (!missing.length) return;
-        document.documentElement.innerHTML =
-            '<body style="margin:0;font:15px/1.55 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;' +
-            'background:#0d0f13;color:#e5e7eb;display:flex;align-items:center;justify-content:center;min-height:100dvh;padding:24px;">' +
-            '<div style="max-width:420px;text-align:center;">' +
-            '<div style="font-size:26px;font-weight:800;margin-bottom:10px;">ZenDocz could not start</div>' +
-            '<p style="color:#9ca3af;margin:0 0 18px;">Part of the app (' + missing.join(' and ') +
-            ') did not load. This is almost always a network or content-blocker problem, not your notes — ' +
-            'everything you have written is still safely stored on this device.</p>' +
-            '<button onclick="location.reload()" style="background:#1a73e8;color:#fff;border:0;border-radius:10px;' +
-            'padding:11px 20px;font-weight:700;font-size:14px;cursor:pointer;">Try again</button>' +
-            '<p style="color:#6b7280;font-size:12px;margin-top:16px;">If it keeps happening, check your connection or ' +
-            'disable any content blocker for this site, then reload.</p></div></body>';
-        throw new Error('[zd] boot aborted: missing ' + missing.join(', '));
-    })();
-    </script>
+    <script src="https://cdn.quilljs.com/1.3.6/quill.js"></script>
     <!-- Vendored (not fetched at runtime): QR Code Generator for JavaScript, (c) 2009 Kazuhiko Arase, MIT license — used to render the payment QR code below fully offline, with no third-party service involved. -->
     <script>
 //---------------------------------------------------------------------
@@ -4272,21 +4228,16 @@ var qrcode = function() {
        every-browser way to move your whole vault to another device.
     ============================================================ */
     const ZD_LOCAL_DB_NAME = 'zendocz-local';
-    /* v2 adds the `journal` store: the crash-recovery write-ahead log. It is
-       used in BOTH storage modes (cloud accounts included) — it is the only
-       thing standing between an unsaved edit and a browser crash. */
     function zdIdbOpen() {
         return new Promise((resolve, reject) => {
-            const req = indexedDB.open(ZD_LOCAL_DB_NAME, 2);
+            const req = indexedDB.open(ZD_LOCAL_DB_NAME, 1);
             req.onupgradeneeded = () => {
                 const dbx = req.result;
                 if (!dbx.objectStoreNames.contains('docs')) dbx.createObjectStore('docs', { keyPath: 'path' });
                 if (!dbx.objectStoreNames.contains('meta')) dbx.createObjectStore('meta', { keyPath: 'key' });
-                if (!dbx.objectStoreNames.contains('journal')) dbx.createObjectStore('journal', { keyPath: 'key' });
             };
             req.onsuccess = () => resolve(req.result);
             req.onerror = () => reject(req.error);
-            req.onblocked = () => reject(new Error('IndexedDB upgrade blocked by another tab'));
         });
     }
     let _zdIdbPromise = null;
@@ -4313,33 +4264,6 @@ var qrcode = function() {
             const r = store.getAll(range); r.onsuccess = () => res(r.result || []); r.onerror = () => rej(r.error);
         }));
     }
-    /* ---------- CRASH-RECOVERY JOURNAL (write-ahead log) ----------
-       Every edit is written here within ~400ms, long before the debounced
-       save fires. An entry is removed only when the exact same content has
-       been confirmed written to the real database. Anything left behind
-       after a crash, a killed tab, a dead battery or a failed network save
-       is offered back to you on the next launch. Keyed by user + doc so two
-       accounts on one browser can never see each other's drafts. */
-    function zdJournalTx(mode) {
-        return zdIdb().then(dbx => dbx.transaction('journal', mode).objectStore('journal'));
-    }
-    function zdJournalKey(uid, docId) { return (uid || 'anon') + '::' + docId; }
-    function zdJournalPut(entry) {
-        return zdJournalTx('readwrite').then(store => new Promise((res, rej) => {
-            const r = store.put(entry); r.onsuccess = () => res(); r.onerror = () => rej(r.error);
-        })).catch(e => { console.warn('[zd] journal write failed', e); });
-    }
-    function zdJournalDelete(key) {
-        return zdJournalTx('readwrite').then(store => new Promise((res, rej) => {
-            const r = store.delete(key); r.onsuccess = () => res(); r.onerror = () => rej(r.error);
-        })).catch(() => {});
-    }
-    function zdJournalAll() {
-        return zdJournalTx('readonly').then(store => new Promise((res, rej) => {
-            const r = store.getAll(); r.onsuccess = () => res(r.result || []); r.onerror = () => rej(r.error);
-        })).catch(() => []);
-    }
-
     function zdIdbMetaGet(key) {
         return zdIdbTx('meta', 'readonly').then(store => new Promise((res, rej) => {
             const r = store.get(key); r.onsuccess = () => res(r.result ? r.result.value : null); r.onerror = () => rej(r.error);
@@ -4603,10 +4527,7 @@ var qrcode = function() {
         offlineMode: false, dirty: false, lastSavedSig: null,
         paletteIndex: 0,
         linkHintShown: false,
-        billing: {},
-        /* notes deleted in this session — stops an in-flight save from
-           silently recreating a note the user just deleted */
-        deletedIds: new Set()
+        billing: {}
     };
 
     /* ============================================================
@@ -4745,10 +4666,7 @@ var qrcode = function() {
         if (state.dirty) { setStatus('saving', 'Back online — syncing…'); triggerSave(); }
         else setStatus('saved', 'Saved');
     }
-    window.addEventListener('online', () => {
-        zdOnConnectivityChange(true);
-        try { if (window.zdRetryPending) zdRetryPending(); } catch (e) {}
-    });
+    window.addEventListener('online', () => zdOnConnectivityChange(true));
     window.addEventListener('offline', () => zdOnConnectivityChange(false));
     setTimeout(() => { if (!navigator.onLine) zdOnConnectivityChange(false); }, 1500);
 
@@ -4930,21 +4848,8 @@ var qrcode = function() {
     });
 
     const sizeInput = document.getElementById('size-input');
-    /* FIX: quill.getFormat() with no argument reads the current selection —
-       which is null whenever focus is anywhere but the editor. Quill then
-       threw on `.index`, and because this runs from a selection-change
-       handler it threw on every click outside the editor. */
-    function currentSizePx(range) {
-        try {
-            const r = range || quill.getSelection();
-            const f = r ? quill.getFormat(r) : {};
-            return f.size || '11px';
-        } catch (e) { return '11px'; }
-    }
-    function updateSizeInput(range) {
-        if (!sizeInput) return;
-        const s = currentSizePx(range); sizeInput.value = parseInt(s, 10) || 11;
-    }
+    function currentSizePx(range) { const f = quill.getFormat(range || undefined); return f.size || '11px'; }
+    function updateSizeInput(range) { const s = currentSizePx(range); sizeInput.value = parseInt(s, 10) || 11; }
     function applySize(px) { const r = quill.getSelection(); if (!r) { quill.focus(); } quill.format('size', px); sizeInput.value = parseInt(px, 10); }
     document.getElementById('size-inc').addEventListener('click', () => { const cur = currentSizePx(); let i = SIZE_STEPS.indexOf(cur); if (i < 0) { i = SIZE_STEPS.indexOf('11px'); } if (i < SIZE_STEPS.length - 1) applySize(SIZE_STEPS[i + 1]); });
     document.getElementById('size-dec').addEventListener('click', () => { const cur = currentSizePx(); let i = SIZE_STEPS.indexOf(cur); if (i < 0) { i = SIZE_STEPS.indexOf('11px'); } if (i > 0) applySize(SIZE_STEPS[i - 1]); });
@@ -5235,12 +5140,11 @@ var qrcode = function() {
                 d.id !== state.docId &&
                 (d.title || '').trim().toLowerCase() === newTitle.toLowerCase()
             );
-            /* FIX: this used to revert the title and bail out. V5.8b's
-               auto-numbering handler runs 40ms later and found the name
-               already reverted, so its "saved as (2)" promise never happened
-               and the rename was silently discarded. Leave duplicates to
-               V5.8b, which resolves them instead of throwing them away. */
-            if (isDuplicate) return;   /* handled by the auto-number pass on blur */
+            if (isDuplicate) {
+                showToast('A document with this name already exists.');
+                if (current) titleEl.value = current.title || 'Untitled Document';
+                return;
+            }
             triggerSave();
         });
         titleEl.addEventListener('input', () => {
@@ -5528,21 +5432,11 @@ var qrcode = function() {
                 if (active) {
                     if (els.title.value !== active.title && document.activeElement !== els.title) els.title.value = active.title;
                     const isTyping = (Date.now() - state.lastTypeTime) < 2000;
-                    /* FIX: never repaint over edits that have not been saved
-                       yet. `isTyping` alone was not enough — a save that is
-                       still in flight, queued for retry, or held offline left
-                       `state.dirty` true, and the server's older copy wiped
-                       the newer local text. */
-                    const unsaved = state.dirty || (window.zdPendingCount && zdPendingCount() > 0);
-                    if (!isTyping && !unsaved) {
+                    if (!isTyping) {
                         const cur = JSON.stringify(quill.getContents()); const nw = JSON.stringify(active.content);
                         if (cur !== nw) {
                             const r = quill.getSelection(); quill.setContents(active.content, 'silent');
-                            /* V3.6: a remote replace invalidates the undo stack.
-                               V5.5c gated history.clear() to note-switches only,
-                               which silently disabled it here — leaving stale
-                               undo steps that corrupt the note when replayed. */
-                            if (window.zdForceHistoryClear) zdForceHistoryClear(); else quill.history.clear();
+                            quill.history.clear(); /* V3.6: remote replace invalidates old undo steps */
                             if (r && quill.hasFocus()) quill.setSelection(r);
                             updateWordCount();
                             scanInlineTokens(false); /* V3.3: keep #tags/[[links]]/URLs highlighted after every sync — no write */
@@ -5569,12 +5463,6 @@ var qrcode = function() {
             } else if (state.firstLoad && !state.docId) {
                 state.firstLoad = false; els.loadingScreen.classList.add('hidden');
                 state.docs.length > 0 ? openDoc(state.docs[0].id, state.docs[0]) : createNewDoc();
-            }
-            /* Once, after the first real snapshot: offer back anything the
-               journal is still holding that never reached the database. */
-            if (!state._recoveryChecked) {
-                state._recoveryChecked = true;
-                setTimeout(() => { try { if (window.zdRunRecovery) zdRunRecovery(); } catch (e) { console.warn('[zd] recovery check failed', e); } }, 1800);
             }
         });
     }
@@ -5999,21 +5887,6 @@ var qrcode = function() {
        OPEN DOC
     ============================================================ */
     window.openDoc = (id, data) => {
-        if (!id || !data) return;
-        /* FIX: validate and load the content BEFORE committing to the switch.
-           Previously `state.docId` was reassigned first and `quill.setContents`
-           came later — so a corrupt Delta threw halfway through and left the
-           app pointing at note B while still displaying note A's text. The
-           next keystroke then wrote A's content over B. */
-        let _content = data.content;
-        if (_content && typeof _content === 'object' && !Array.isArray(_content) && !Array.isArray(_content.ops)) _content = '';
-        try {
-            quill.setContents(_content || '', 'api');
-        } catch (err) {
-            console.error('[zd] could not open note', id, err);
-            try { showToast('That note could not be opened — it looks damaged. Nothing was changed.'); } catch (e) {}
-            return;
-        }
         state.docId = id; state.isFav = data.isFavorite || false;
         if (state.importedUnsubscribe) { state.importedUnsubscribe(); state.importedUnsubscribe = null; }
 
@@ -6036,7 +5909,7 @@ var qrcode = function() {
         state.comments = data.comments || {};
         updateFavIcon();
         state.reading = false; /* V3.5: switching notes always returns to edit mode */
-        quill.enable();
+        quill.setContents(data.content || '', 'api'); quill.enable();
         quill.history.clear(); /* V3.6: every note gets its own clean undo stack */
         setTimeout(() => { updateTaskProgress(); applyHeadingFolds(); renderDeepThink(); }, 80); /* V3.8 */
         applyMargins(); renderComments();
@@ -6061,13 +5934,6 @@ var qrcode = function() {
             els.syncBanner.classList.remove('hidden');
             state.importedUnsubscribe = db.collection('shared_docs').doc(data.importedFromShareId).onSnapshot(doc => {
                 if (doc.exists) {
-                    /* FIX: this used to repaint the editor the instant the
-                       original author saved — mid-keystroke — and then write
-                       the overwrite back, destroying whatever you were typing.
-                       Same typing guard the main listener uses. */
-                    if (state.docId !== id) return;
-                    if ((Date.now() - (state.lastTypeTime || 0)) < 2500) return;
-                    if (state.dirty) return;
                     const p = doc.data();
                     const cur = JSON.stringify(quill.getContents()); const inc = JSON.stringify(p.c);
                     if (cur !== inc) {
@@ -6164,73 +6030,53 @@ var qrcode = function() {
         }
         setStatus('saving', 'Saving…');
         if (state.saveTimer) clearTimeout(state.saveTimer);
-        state.saveTimer = setTimeout(() => saveToDb(), 1000);
+        state.saveTimer = setTimeout(saveToDb, 1000);
     }
-    /* Capture EVERYTHING a save needs in one synchronous read of the editor.
-       This is the heart of the save-integrity fix: once captured, the save
-       is bound to this exact note and this exact content. Nothing that
-       happens afterwards — switching notes, more typing, a slow network —
-       can make it write to the wrong place or mark the wrong thing clean. */
-    window.zdCaptureDoc = function zdCaptureDoc() {
-        return {
-            docId: state.docId,
-            uid: (state.user && state.user.uid) || null,
-            title: els.title.value.trim() || 'Untitled',
-            content: JSON.parse(JSON.stringify(quill.getContents())),
-            isFav: !!state.isFav,
-            folderId: els.folderSelect.value || null,
-            marginL: state.marginL, marginR: state.marginR,
-            comments: JSON.parse(JSON.stringify(state.comments || {})),
-            shareId: (state.docs.find(d => d.id === state.docId) || {}).shareId || null,
-            sig: computeSaveSig(),
-            at: Date.now()
-        };
-    };
-    /* Writes one captured snapshot. Never reads live editor state, so it is
-       safe to call long after the user has moved on to another note. */
-    window.zdWriteSnapshot = async function zdWriteSnapshot(snap) {
-        if (!snap || !snap.docId || !snap.uid) throw new Error('zd: incomplete snapshot');
-        const userDocUpdate = {
-            title: snap.title,
-            content: snap.content,
-            isFavorite: snap.isFav,
-            folderId: snap.folderId,
-            marginL: snap.marginL,
-            marginR: snap.marginR,
-            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-        };
-        Object.keys(snap.comments).forEach(cid => { userDocUpdate['comments.' + cid] = snap.comments[cid]; });
-
-        const userRef = db.collection('users').doc(snap.uid).collection('docs').doc(snap.docId);
+    async function saveToDb() {
+        if (!state.docId) return;
+        const sig = computeSaveSig();
+        /* QUOTA SAVER: double-check right before the network write */
+        if (sig === state.lastSavedSig) { state.dirty = false; pushDocSnapshot(); /* V3.8: local time-machine snapshot */
+            setStatus('saved', 'Saved'); return; }
         try {
-            await userRef.update(userDocUpdate);
-        } catch (e) {
-            /* A `not-found` here used to silently RECREATE a note the user had
-               just deleted. Only recreate when the note is genuinely still
-               supposed to exist. */
-            if (e && e.code === 'not-found') {
-                if (state.deletedIds && state.deletedIds.has(snap.docId)) return;
-                await userRef.set({ ...userDocUpdate, comments: snap.comments, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
-            } else { throw e; }
-        }
+            const currentContent = JSON.parse(JSON.stringify(quill.getContents()));
+            const titleVal = els.title.value.trim() || 'Untitled';
 
-        if (snap.shareId) {
-            const sharedUpdate = { t: snap.title, c: snap.content, theme: localStorage.getItem('theme') || 'light' };
-            Object.keys(snap.comments).forEach(cid => { sharedUpdate['comments.' + cid] = snap.comments[cid]; });
-            /* A broken share must never fail the user's own save. */
-            try { await db.collection('shared_docs').doc(snap.shareId).update(sharedUpdate); }
-            catch (e) { console.warn('[zd] shared copy not updated', e); }
-        }
-    };
-    async function saveToDb(snap) {
-        if (!snap) {
-            if (!state.docId) return;
-            if (computeSaveSig() === state.lastSavedSig) { state.dirty = false; try { pushDocSnapshot(); } catch (e) {} setStatus('saved', 'Saved'); return; }
-            snap = zdCaptureDoc();
-        }
-        await zdWriteSnapshot(snap);
-        try { pushDocSnapshot(); } catch (e) {}
-        return snap;
+            const userDocUpdate = {
+                title: titleVal,
+                content: currentContent,
+                isFavorite: state.isFav,
+                folderId: els.folderSelect.value || null,
+                marginL: state.marginL,
+                marginR: state.marginR,
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            };
+            const comments = state.comments || {};
+            Object.keys(comments).forEach(cid => { userDocUpdate['comments.' + cid] = comments[cid]; });
+
+            const userRef = db.collection('users').doc(state.user.uid).collection('docs').doc(state.docId);
+            try {
+                await userRef.update(userDocUpdate);
+            } catch (e) {
+                if (e.code === 'not-found') {
+                    await userRef.set({ ...userDocUpdate, comments: comments, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+                } else { throw e; }
+            }
+
+            const active = state.docs.find(d => d.id === state.docId);
+            if (active && active.shareId) {
+                const sharedUpdate = {
+                    t: titleVal, c: currentContent,
+                    theme: localStorage.getItem('theme') || 'light'
+                };
+                Object.keys(comments).forEach(cid => { sharedUpdate['comments.' + cid] = comments[cid]; });
+                await db.collection('shared_docs').doc(active.shareId).update(sharedUpdate);
+            }
+
+            state.lastSavedSig = sig;
+            state.dirty = false;
+            setStatus('saved', 'Saved');
+        } catch (e) { console.error(e); setStatus('error', 'Error saving'); }
     }
 
     window.shareCurrentNote = async () => {
@@ -6240,9 +6086,7 @@ var qrcode = function() {
         btn.innerHTML = '<svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" d="M12 3a9 9 0 019 9"/></svg><span>Sharing…</span>';
         btn.disabled = true;
         try {
-            const active = state.docs.find(d => d.id === state.docId);
-            if (!active) { showToast('Still syncing this note — try again in a second.'); btn.innerHTML = orig; btn.disabled = false; return; }
-            let shareId = active.shareId;
+            const active = state.docs.find(d => d.id === state.docId); let shareId = active.shareId;
             if (!shareId) {
                 const noteData = {
                     t: els.title.value, c: JSON.parse(JSON.stringify(quill.getContents())),
@@ -6410,10 +6254,9 @@ var qrcode = function() {
         state.lastTypeTime = Date.now();
         if (state.saveTimer) clearTimeout(state.saveTimer);
 
-        /* FIX: the shared-note branch skipped this, leaving a yellow
-           highlight in the text forever with no comment behind it and no way
-           left to remove it. */
-        removeCommentFormat(cid);
+        if (!isSharedReceiver) {
+            removeCommentFormat(cid);
+        }
 
         // Optimistic UI update
         delete state.comments[cid];
@@ -6425,34 +6268,22 @@ var qrcode = function() {
         try {
             if (isSharedReceiver) {
                 const atomicDelete = { [fieldPath]: firebase.firestore.FieldValue.delete() };
-                /* shared_docs stores the body as `c`, the private copy as `content` */
                 await db.collection('shared_docs')
                     .doc(activeDoc.importedFromShareId)
-                    .update({ ...atomicDelete, c: cleanContent });
+                    .update(atomicDelete);
                 await db.collection('users').doc(state.user.uid)
                     .collection('docs').doc(state.docId)
-                    .update({ ...atomicDelete, content: cleanContent, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
-                state.lastSavedSig = computeSaveSig();
-                state.dirty = false;
+                    .update(atomicDelete);
             } else {
                 /* FIX v2: write the cleaned content in the SAME update as the
                    comment delete. Previously the field delete landed first,
                    the snapshot listener saw server content that still had the
                    highlight, and repainted it before the debounced save ran. */
-                /* FIX: this used to send ONLY `content`, then re-baseline the
-                   fingerprint from the whole document — so a title, star,
-                   folder or margin change made in the same moment was marked
-                   "saved" while never actually being written, and no later
-                   save could ever detect the difference. Send everything. */
                 await db.collection('users').doc(state.user.uid)
                     .collection('docs').doc(state.docId)
                     .update({
                         [fieldPath]: firebase.firestore.FieldValue.delete(),
                         content: cleanContent,
-                        title: els.title.value.trim() || 'Untitled',
-                        isFavorite: !!state.isFav,
-                        folderId: els.folderSelect.value || null,
-                        marginL: state.marginL, marginR: state.marginR,
                         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
                     });
                 if (activeDoc && activeDoc.shareId) {
@@ -6574,19 +6405,11 @@ var qrcode = function() {
         const id = await createNewFolder();
 
         if (id && state.docId) {
-            /* FIX: an unhandled rejection here left the dropdown showing the
-               new folder while the note had not actually moved. */
-            try {
-                await db.collection('users').doc(state.user.uid).collection('docs').doc(state.docId).update({ folderId: id });
-                els.folderSelect.value = id;
-                updateFolderDdLabel();
-                showToast('Moved to new folder.');
-            } catch (e) {
-                console.error('[zd] could not move note to new folder', e);
-                els.folderSelect.value = previousFolderId;
-                updateFolderDdLabel();
-                showToast('Folder created, but the note could not be moved into it.');
-            }
+            // Success: update the database and UI
+            await db.collection('users').doc(state.user.uid).collection('docs').doc(state.docId).update({ folderId: id });
+            els.folderSelect.value = id;
+            updateFolderDdLabel();
+            showToast('Moved to new folder.');
         } else {
             // Cancelled: reset the dropdown back to the document's current folder
             els.folderSelect.value = previousFolderId;
@@ -9770,42 +9593,7 @@ var qrcode = function() {
 
     /* ---------- PWA: service worker + custom install popup ---------- */
     if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
-        window.addEventListener('load', () => {
-            navigator.serviceWorker.register('./sw.js').then(reg => {
-                if (!reg) return;
-                /* Offer a reload when a new version is ready instead of leaving
-                   stale code running against a freshly swapped cache. */
-                let refreshing = false;
-                const offer = () => {
-                    if (refreshing) return;
-                    try {
-                        showToast('A new version of ZenDocz is ready — reload to update.', 9000);
-                    } catch (e) {}
-                };
-                reg.addEventListener('updatefound', () => {
-                    const sw = reg.installing;
-                    if (!sw) return;
-                    sw.addEventListener('statechange', () => {
-                        if (sw.state === 'installed' && navigator.serviceWorker.controller) offer();
-                    });
-                });
-                /* Only reload when there is nothing unsaved — never yank the
-                   page out from under someone who is mid-sentence. */
-                navigator.serviceWorker.addEventListener('controllerchange', () => {
-                    if (refreshing) return;
-                    if (typeof state !== 'undefined' && (state.dirty || (window.zdPendingCount && zdPendingCount() > 0))) return;
-                    refreshing = true;
-                });
-                /* Check for a new deploy every 30 minutes on long sessions. */
-                setInterval(() => { try { reg.update(); } catch (e) {} }, 30 * 60 * 1000);
-            }).catch(err => console.warn('[zd] service worker not registered', err));
-
-            navigator.serviceWorker.addEventListener('message', (e) => {
-                if (e.data && e.data.type === 'zd-sw-updated') {
-                    try { showToast('ZenDocz updated in the background — reload when convenient.', 7000); } catch (err) {}
-                }
-            });
-        });
+        window.addEventListener('load', () => { navigator.serviceWorker.register('./sw.js').catch(() => {}); });
     }
     let zdDeferredPrompt = null;
     function zdStandalone() {
@@ -10072,10 +9860,9 @@ var qrcode = function() {
             else if (isIOS) { showToast('Safari → Share → Add to Home Screen'); }
             else { showToast('Browser menu (⋮) → "Install app" / "Add to Home screen".'); }
         };
-        const _ga = document.getElementById('getapp-modal');
-        if (_ga) _ga.classList.add('open');
+        document.getElementById('getapp-modal').classList.add('open');
     };
-    window.closeGetApp = () => { const m = document.getElementById('getapp-modal'); if (m) m.classList.remove('open'); };
+    window.closeGetApp = () => document.getElementById('getapp-modal').classList.remove('open'); 
 
     /* --- snoozable reminders (overrides the V3.9 fireReminder) --- */
     let _rfId = null;
@@ -11060,10 +10847,8 @@ window.zdImportBackup = () => {
     inp.onchange = async () => {
         const file = inp.files && inp.files[0]; if (!file) return;
         let data;
-        if (file.size > 80 * 1024 * 1024) { showToast('That backup is over 80 MB — too large to import in one go.'); return; }
         try { data = JSON.parse(await file.text()); } catch (e) { showToast('That file isn\u2019t a valid ZenDocz backup.'); return; }
         if (!data || !Array.isArray(data.docs)) { showToast('That file isn\u2019t a valid ZenDocz backup.'); return; }
-        if (!data.docs.length) { showToast('That backup contains no notes.'); return; }
         const ok = await zdConfirm(data.docs.length + ' notes will be added to your account (nothing is deleted).', { title: 'Import backup?', okText: 'Import' });
         if (!ok) return;
         showToast('Importing ' + data.docs.length + ' notes\u2026', 6000);
@@ -11086,21 +10871,12 @@ window.zdImportBackup = () => {
                 const batch = db.batch();
                 data.docs.slice(i, i + 300).forEach(d => {
                     if (!d) return;
-                    /* FIX: validate the shape before writing. An unrecognised
-                       `content` shape produced notes Quill could not render,
-                       and an unknown `eis` value produced notes invisible in
-                       the Matrix view — both silently. */
-                    let _c = d.content;
-                    if (!(_c && typeof _c === 'object' && Array.isArray(_c.ops))) {
-                        _c = { ops: [{ insert: String((_c && _c.ops ? '' : _c) || '') + '\n' }] };
-                    }
-                    const _eis = (typeof EIS_QUADS !== 'undefined' && EIS_QUADS.some(q => q.id === d.eis)) ? d.eis : null;
                     batch.set(col.doc(), {
                         title: String(d.title || 'Untitled').slice(0, 300),
-                        content: _c,
+                        content: (d.content && typeof d.content === 'object') ? d.content : String(d.content || ''),
                         isFavorite: !!d.isFavorite, pinned: !!d.pinned,
                         folderId: (d.folderName && folderIds[d.folderName]) || null,
-                        kanban: d.kanban || null, eis: _eis,
+                        kanban: d.kanban || null, eis: d.eis || null,
                         eisDue: typeof d.eisDue === 'number' ? d.eisDue : null, eisDone: !!d.eisDone,
                         comments: (d.comments && typeof d.comments === 'object') ? d.comments : {},
                         marginL: 96, marginR: 96,
@@ -11370,9 +11146,9 @@ window.addEventListener('keydown', (e) => {
     if (im && im.style.display === 'flex') { stop(); closeInfoModal(); return; }
     const gl = document.getElementById('eis-glance-modal');
     if (gl && gl.classList.contains('open')) { stop(); closeEisGlance(); return; }
-    for (const [id, fn] of [['trash-modal', 'closeTrash'], ['zdimp-modal', 'closeImporter']]) {
+    for (const [id, fn] of [['vault-modal', 'closeVault'], ['trash-modal', 'closeTrash'], ['clip-modal', 'closeClipper'], ['zdimp-modal', 'closeImporter']]) {
         const m = document.getElementById(id);
-        if (m && m.classList.contains('open') && typeof window[fn] === 'function') { stop(); window[fn](); return; }
+        if (m && m.classList.contains('open')) { stop(); window[fn](); return; }
     }
     const rp = document.getElementById('ref-pane');
     if (rp && rp.classList.contains('open')) { stop(); closeRefPanel(); return; }
@@ -11450,41 +11226,24 @@ function trashRef() { return db.collection('users').doc(state.user.uid).collecti
 /* deleting a note now moves it to trash instead of destroying it */
 window.deleteCurrentDoc = async () => {
     if (!state.docId) return;
-    const del = state.docId;
-    const doc = state.docs.find(d => d.id === del) || {};
-    const ok = await zdConfirm(`"${(doc.title) || els.title.value || 'This note'}" moves to Trash — restorable for 30 days.`, { title: 'Move to trash?', okText: 'Move to trash', danger: true });
+    const doc = state.docs.find(d => d.id === state.docId);
+    const ok = await zdConfirm(`"${doc?.title || 'This note'}" moves to Trash — restorable for 30 days.`, { title: 'Move to trash?', okText: 'Move to trash', danger: true });
     if (!ok) return;
-    /* FIX: the trash copy is taken from the LIVE editor. The old code copied
-       `state.docs`, which only holds the last version the server sent back —
-       so anything typed in the seconds before deleting was destroyed and was
-       not even recoverable from Trash. */
-    let live = null;
-    if (del === state.docId) { try { live = zdCaptureDoc(); } catch (e) { live = null; } }
+    const del = state.docId;
     try {
         const data = JSON.parse(JSON.stringify({
-            title: (live && live.title) || doc.title || 'Untitled',
-            content: (live && live.content) || doc.content || '',
-            isFavorite: live ? live.isFav : !!doc.isFavorite,
-            folderId: (live ? live.folderId : doc.folderId) || null,
-            comments: (live && live.comments) || doc.comments || {},
-            kanban: doc.kanban || null,
+            title: doc.title || 'Untitled', content: doc.content || '',
+            isFavorite: !!doc.isFavorite, folderId: doc.folderId || null,
+            comments: doc.comments || {}, kanban: doc.kanban || null,
             eis: doc.eis || null, eisDue: doc.eisDue || null, eisDone: !!doc.eisDone
         }));
         data.trashedAt = Date.now();
         await trashRef().add(data);
-        /* only stop future saves once the trash copy is safely written */
-        state.deletedIds.add(del);
-        if (state.saveTimer) { clearTimeout(state.saveTimer); state.saveTimer = null; }
-        state.dirty = false;
         await db.collection('users').doc(state.user.uid).collection('docs').doc(del).delete();
-        try { if (state.user) zdJournalDelete(zdJournalKey(state.user.uid, del)); } catch (e) {}
         const rem = state.docs.filter(d => d.id !== del);
         if (rem.length > 0) openDoc(rem[0].id, rem[0]); else createNewDoc();
         showToast('Moved to trash — restorable for 30 days.');
-    } catch (e) {
-        state.deletedIds.delete(del);
-        console.error(e); showToast('Could not move to trash — nothing was deleted.');
-    }
+    } catch (e) { console.error(e); showToast('Could not move to trash.'); }
 };
 window.openTrash = async () => {
     if (state.isGuest) { showToast('Sign in first.'); return; }
@@ -11497,13 +11256,7 @@ window.openTrash = async () => {
         const rows = [];
         snap.docs.forEach(ds => {
             const d = ds.data();
-            /* FIX: `(d.trashedAt || 0) < cutoff` destroyed any trash row whose
-               date was missing or not yet resolved — instantly, on opening
-               Trash, with no confirmation. Only purge rows with a real date
-               that is genuinely older than 30 days; repair the rest. */
-            const ta = typeof d.trashedAt === 'number' && isFinite(d.trashedAt) && d.trashedAt > 0 ? d.trashedAt : null;
-            if (ta === null) { ds.ref.update({ trashedAt: Date.now() }).catch(() => {}); d.trashedAt = Date.now(); }
-            else if (ta < cutoff) { ds.ref.delete().catch(() => {}); return; } /* auto-purge */
+            if ((d.trashedAt || 0) < cutoff) { ds.ref.delete().catch(() => {}); return; } /* auto-purge */
             rows.push({ id: ds.id, d: d });
         });
         list.innerHTML = rows.length ? '' : '<div class="text-center text-muted text-xs py-8">Trash is empty.</div>';
@@ -11539,18 +11292,166 @@ window.closeTrash = () => document.getElementById('trash-modal').classList.remov
 document.getElementById('trash-modal').addEventListener('click', (e) => { if (e.target.id === 'trash-modal') closeTrash(); });
 
 /* ============================================================
-   VAULT — removed. Superseded by Locked Notes (further down), which
-   already deletes this feature's modal, strips its menu entry and drops
-   it from ZD_FEATURES at runtime — so its ~120 lines of UI code were
-   unreachable, and its secret viewer built an inline onclick out of the
-   decrypted text (a stored-injection hazard). Removed outright.
+   VAULT — passcode-encrypted secrets (AES-GCM + PBKDF2, on-device)
 ============================================================ */
+document.body.insertAdjacentHTML('beforeend', `
+<div id="vault-modal" class="zd-cmodal"><div class="zd-cmodal-box max-w-sm flex flex-col" style="max-height:82vh">
+  <div class="flex items-center justify-between mb-1 flex-shrink-0">
+    <h3 class="font-bold text-sm text-gray-800 dark:text-white flex items-center gap-2"><svg class="w-4 h-4 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path stroke-linecap="round" d="M8 11V7a4 4 0 018 0v4"/></svg> Encrypted vault <span class="text-[9px] font-normal text-muted">AES-256 · zero-knowledge</span></h3>
+    <button onclick="closeVault()" class="text-muted hover:text-danger text-xl leading-none active:scale-90">×</button>
+  </div>
+  <div id="vault-body" class="flex-1 min-h-0 overflow-y-auto zd-scroll pr-1"></div>
+</div></div>`);
+const zdB64 = a => btoa(String.fromCharCode.apply(null, a));
+const zdU64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+let _vKeyObj = null;
+function vaultRef() { return db.collection('users').doc(state.user.uid).collection('vault'); }
+async function vDeriveKey(pass, salt) {
+    const km = await crypto.subtle.importKey('raw', new TextEncoder().encode(pass), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey({ name: 'PBKDF2', salt: salt, iterations: 150000, hash: 'SHA-256' }, km, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+async function vEnc(obj) {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, _vKeyObj, new TextEncoder().encode(JSON.stringify(obj)));
+    return { iv: zdB64(iv), ct: zdB64(new Uint8Array(ct)) };
+}
+async function vDec(blob) {
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: zdU64(blob.iv) }, _vKeyObj, zdU64(blob.ct));
+    return JSON.parse(new TextDecoder().decode(pt));
+}
+window.openVault = () => {
+    if (state.isGuest) { showToast('Sign in first.'); return; }
+    if (!window.crypto || !crypto.subtle) { showToast('This browser doesn\u2019t support secure encryption.'); return; }
+    document.getElementById('vault-modal').classList.add('open');
+    _vKeyObj ? vRenderList() : vRenderLock();
+};
+window.closeVault = () => document.getElementById('vault-modal').classList.remove('open');
+window.lockVault = () => { _vKeyObj = null; vRenderLock(); showToast('Vault locked.'); };
+function vRenderLock() {
+    document.getElementById('vault-body').innerHTML = `
+        <div class="text-center py-3"><svg class="w-9 h-9 mx-auto text-muted mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.6"><rect x="5" y="11" width="14" height="10" rx="2"/><path stroke-linecap="round" d="M8 11V7a4 4 0 018 0v4M12 15v3"/></svg>
+        <p class="text-[11px] text-muted mb-3 leading-snug">Store passwords, keys &amp; private text encrypted with a passcode that <b>never leaves this device</b>.<br><span class="text-amber-500">If you forget it, nothing can be recovered.</span></p>
+        <input id="v-pass" type="password" placeholder="Vault passcode" class="zd44-in mb-2" autocomplete="off">
+        <button onclick="vUnlock()" class="w-full py-2.5 text-xs font-bold rounded-xl text-white active:scale-[.98] transition" style="background-image:var(--zd-grad)">Unlock / Create vault</button></div>`;
+    setTimeout(() => { try { document.getElementById('v-pass').focus(); } catch (e) {} }, 100);
+    document.getElementById('v-pass').addEventListener('keydown', e => { if (e.key === 'Enter') vUnlock(); });
+}
+window.vUnlock = async () => {
+    const pass = document.getElementById('v-pass').value;
+    if (!pass || pass.length < 4) { showToast('Passcode needs at least 4 characters.'); return; }
+    try {
+        const metaSnap = await vaultRef().doc('_meta').get();
+        if (metaSnap.exists) {
+            const m = metaSnap.data();
+            _vKeyObj = await vDeriveKey(pass, zdU64(m.salt));
+            try { await vDec(m.check); } catch (e) { _vKeyObj = null; showToast('Wrong passcode.'); return; }
+        } else {
+            const salt = crypto.getRandomValues(new Uint8Array(16));
+            _vKeyObj = await vDeriveKey(pass, salt);
+            await vaultRef().doc('_meta').set({ salt: zdB64(salt), check: await vEnc({ ok: 'zd' }) });
+            showToast('Vault created — remember your passcode!');
+        }
+        vRenderList();
+    } catch (e) { console.error(e); showToast('Vault error — check connection & Firestore rules.'); }
+};
+async function vRenderList() {
+    const body = document.getElementById('vault-body');
+    body.innerHTML = '<div class="text-center text-muted text-xs py-6">Decrypting…</div>';
+    try {
+        const snap = await vaultRef().orderBy('createdAt', 'desc').get();
+        let html = `<div class="flex gap-1.5 mb-3">
+            <button onclick="vAddForm()" class="flex-1 py-2 text-xs font-bold rounded-xl text-white active:scale-95 transition" style="background-image:var(--zd-grad)">+ New secret</button>
+            <button onclick="lockVault()" class="px-3.5 py-2 text-xs font-semibold rounded-xl bg-bg border border-border text-text hover:border-accent transition active:scale-95">Lock</button></div><div id="v-list"></div>`;
+        body.innerHTML = html;
+        const list = document.getElementById('v-list');
+        let n = 0;
+        for (const ds of snap.docs) {
+            if (ds.id === '_meta') continue;
+            let item; try { item = await vDec(ds.data().blob); } catch (e) { continue; }
+            n++;
+            const row = document.createElement('div');
+            row.className = 'zd44-row';
+            row.innerHTML = `<svg class="w-3.5 h-3.5 text-muted flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path stroke-linecap="round" d="M8 11V7a4 4 0 018 0v4"/></svg>
+                <button class="v-view flex-1 min-w-0 text-left text-xs font-medium text-text truncate">${escapeHtml(item.t || 'Untitled secret')}</button>
+                <button class="zd44-ib danger v-del" title="Delete">×</button>`;
+            row.querySelector('.v-view').onclick = () => {
+                body.innerHTML = `<button onclick="vRenderList()" class="text-xs text-accent mb-2">← Back</button>
+                    <div class="text-sm font-bold text-text mb-2">${escapeHtml(item.t || 'Untitled')}</div>
+                    <div class="text-xs text-text whitespace-pre-wrap break-words bg-bg border border-border rounded-xl p-3 mb-2">${escapeHtml(item.x || '')}</div>
+                    <button onclick="navigator.clipboard.writeText(${JSON.stringify(JSON.stringify(item.x || ''))} && ''); navigator.clipboard.writeText(${JSON.stringify(item.x || '')}).then(()=>showToast('Copied.'))" class="w-full py-2 text-xs font-semibold rounded-xl bg-bg border border-border text-text hover:border-accent transition active:scale-95">Copy to clipboard</button>`;
+            };
+            row.querySelector('.v-del').onclick = async () => {
+                const ok = await zdConfirm('This secret will be deleted permanently.', { title: 'Delete secret?', okText: 'Delete', danger: true });
+                if (!ok) return;
+                await ds.ref.delete(); row.remove(); showToast('Deleted.');
+            };
+            list.appendChild(row);
+        }
+        if (!n) list.innerHTML = '<div class="text-center text-muted text-[10px] py-6">No secrets yet — add your first.</div>';
+    } catch (e) { console.error(e); body.innerHTML = '<div class="text-center text-muted text-xs py-6">Could not load vault.</div>'; }
+}
+window.vAddForm = () => {
+    document.getElementById('vault-body').innerHTML = `
+        <button onclick="vRenderList()" class="text-xs text-accent mb-2">← Back</button>
+        <input id="v-t" type="text" placeholder="Label (e.g. Bank PIN)" class="zd44-in mb-2" autocomplete="off">
+        <textarea id="v-x" rows="5" placeholder="Secret content…" class="zd44-in mb-2" style="resize:vertical"></textarea>
+        <button onclick="vSave()" class="w-full py-2.5 text-xs font-bold rounded-xl text-white active:scale-[.98] transition" style="background-image:var(--zd-grad)">Encrypt &amp; save</button>`;
+    setTimeout(() => { try { document.getElementById('v-t').focus(); } catch (e) {} }, 80);
+};
+window.vSave = async () => {
+    const t = document.getElementById('v-t').value.trim();
+    const x = document.getElementById('v-x').value;
+    if (!t && !x.trim()) { showToast('Write something first.'); return; }
+    try {
+        await vaultRef().add({ blob: await vEnc({ t: t || 'Untitled secret', x: x }), createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+        showToast('🔒 Encrypted & saved.'); vRenderList();
+    } catch (e) { showToast('Save failed.'); }
+};
+document.getElementById('vault-modal').addEventListener('click', (e) => { if (e.target.id === 'vault-modal') closeVault(); });
 
 /* ============================================================
-   WEB CLIPPER — removed. The V4.6 pass already deletes its modal and
-   menu entry at runtime ("5 — REMOVE WEB CLIPPER"); only the dead code
-   was still here.
+   WEB CLIPPER — bookmarklet that saves any page into a note
 ============================================================ */
+document.body.insertAdjacentHTML('beforeend', `
+<div id="clip-modal" class="zd-cmodal"><div class="zd-cmodal-box max-w-sm">
+  <div class="flex items-center justify-between mb-2">
+    <h3 class="font-bold text-sm text-gray-800 dark:text-white flex items-center gap-2"><svg class="w-4 h-4 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656L5.586 10.758a6 6 0 108.486 8.486L20.5 12.5"/></svg> Web clipper</h3>
+    <button onclick="closeClipper()" class="text-muted hover:text-danger text-xl leading-none active:scale-90">×</button>
+  </div>
+  <p class="text-[11px] text-muted leading-snug mb-3">Drag the button below to your <b>bookmarks bar</b>. On any webpage, select text (optional) and click it — the page title, link and selection land in a new ZenDocz note.</p>
+  <a id="clip-marklet" class="block text-center w-full py-2.5 text-xs font-bold rounded-xl text-white mb-2 cursor-move" style="background-image:var(--zd-grad)" onclick="showToast('Drag me to your bookmarks bar — don\u2019t click.'); return false;">📎 Clip to ZenDocz</a>
+  <button onclick="copyClipMarklet()" class="w-full py-2 text-xs font-semibold rounded-xl bg-bg border border-border text-text hover:border-accent transition active:scale-95">Copy bookmarklet code (for mobile / manual add)</button>
+</div></div>`);
+function zdClipCode() {
+    const app = location.origin + location.pathname;
+    return "javascript:(function(){location.href='" + app + "?clip=1&ct='+encodeURIComponent(document.title.slice(0,120))+'&cu='+encodeURIComponent(location.href)+'&cs='+encodeURIComponent((window.getSelection?String(getSelection()):'').slice(0,1500));})()";
+}
+window.openClipper = () => { document.getElementById('clip-marklet').href = zdClipCode(); document.getElementById('clip-modal').classList.add('open'); };
+window.closeClipper = () => document.getElementById('clip-modal').classList.remove('open');
+window.copyClipMarklet = async () => { try { await navigator.clipboard.writeText(zdClipCode()); showToast('Bookmarklet copied — paste as a bookmark URL.'); } catch (e) { showToast('Copy failed.'); } };
+document.getElementById('clip-modal').addEventListener('click', (e) => { if (e.target.id === 'clip-modal') closeClipper(); });
+/* handle incoming ?clip=1 once the user & docs are ready */
+(function () {
+    const p = new URLSearchParams(location.search);
+    if (p.get('clip') !== '1') return;
+    const ct = p.get('ct') || 'Clipped page', cu = p.get('cu') || '', cs = p.get('cs') || '';
+    const iv = setInterval(async () => {
+        if (!state.user || state.firstLoad) return;
+        clearInterval(iv);
+        try {
+            const ops = [{ insert: ct }, { insert: '\n', attributes: { header: 2 } }, { insert: '#clipped\n\n' }];
+            if (cs) ops.push({ insert: cs }, { insert: '\n', attributes: { blockquote: true } }, { insert: '\n' });
+            if (cu) ops.push({ insert: 'Source: ' }, { insert: cu, attributes: { link: cu } }, { insert: '\n' });
+            const ref = await db.collection('users').doc(state.user.uid).collection('docs').add({
+                title: ct.slice(0, 120), content: { ops }, isFavorite: false, folderId: null, comments: {}, marginL: 96, marginR: 96,
+                createdAt: firebase.firestore.FieldValue.serverTimestamp(), updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
+            history.replaceState({}, document.title, location.pathname);
+            openDoc(ref.id, { title: ct.slice(0, 120), content: { ops }, comments: {}, marginL: 96, marginR: 96 });
+            showToast('📎 Page clipped into a new note.');
+        } catch (e) { console.error(e); showToast('Clip failed.'); }
+    }, 500);
+})();
 
 /* ============================================================
    REFERENCE PANEL — read-only second note beside the editor
@@ -11670,19 +11571,13 @@ window.zdImportFiles = (accept) => {
                 if (/\.csv$/i.test(f.name)) {
                     const rows = zdCsvRows(text);
                     const head = rows.length > 1 ? rows[0] : null;
-                    /* FIX: forEach does not await an async callback. Rows were
-                       fired off unawaited, the count was added blind, and any
-                       row that failed vanished with no error. */
-                    let failed = 0;
-                    for (const r of (head ? rows.slice(1) : rows).slice(0, 400)) {
+                    (head ? rows.slice(1) : rows).slice(0, 400).forEach(async r => {
                         const title = (r[0] || 'Imported row').slice(0, 120);
                         const body = r.slice(1).map((v, i) => (head && head[i + 1] ? head[i + 1] + ': ' : '') + v).join('\n');
-                        try {
-                            await col.add({ title, content: { ops: [{ insert: (body || title) + '\n' }] }, isFavorite: false, folderId: null, comments: {}, marginL: 96, marginR: 96, createdAt: firebase.firestore.FieldValue.serverTimestamp(), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
-                            made++;
-                        } catch (err) { failed++; console.warn('[zd] CSV row skipped', err); }
-                    }
-                    if (failed) showToast(failed + ' row' + (failed === 1 ? '' : 's') + ' could not be imported.');
+                        await col.add({ title, content: { ops: [{ insert: (body || title) + '\n' }] }, isFavorite: false, folderId: null, comments: {}, marginL: 96, marginR: 96, createdAt: firebase.firestore.FieldValue.serverTimestamp(), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+                        made++;
+                    });
+                    made += Math.max(0, (head ? rows.length - 1 : rows.length));
                 } else {
                     const title = f.name.replace(/\.(md|txt|markdown)$/i, '').slice(0, 120) || 'Imported note';
                     await col.add({ title, content: { ops: zdMdToOps(text) }, isFavorite: false, folderId: null, comments: {}, marginL: 96, marginR: 96, createdAt: firebase.firestore.FieldValue.serverTimestamp(), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
@@ -11746,14 +11641,18 @@ window.openTemplates = function () {
 
 /* ---------- register menus + feature switches, then re-apply ---------- */
 zdMenuInject2('trash', 'openTrash', 'Trash', '<path stroke-linecap="round" d="M4 7h16M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m-9 0l1 13h8l1-13"/>');
+zdMenuInject2('vault', 'openVault', 'Encrypted vault', '<rect x="5" y="11" width="14" height="10" rx="2"/><path stroke-linecap="round" d="M8 11V7a4 4 0 018 0v4"/>');
 zdMenuInject2('ref', 'openRefPanel', 'Reference panel', '<rect x="3" y="4" width="8" height="16" rx="1.5"/><rect x="13" y="4" width="8" height="16" rx="1.5"/>');
 zdMenuInject2('publish', 'publishWebpage', 'Publish as webpage', '<path stroke-linecap="round" stroke-linejoin="round" d="M12 21a9 9 0 100-18 9 9 0 000 18zM3.6 9h16.8M3.6 15h16.8M12 3a15 15 0 010 18"/>');
+zdMenuInject2('clip', 'openClipper', 'Web clipper', '<path stroke-linecap="round" stroke-linejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656L5.586 10.758a6 6 0 108.486 8.486L20.5 12.5"/>');
 zdMenuInject2('import', 'openImporter', 'Import notes (md/csv)', '<path stroke-linecap="round" stroke-linejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M12 16V4m0 0l-4 4m4-4l4 4"/>');
 try {
     ZD_FEATURES.push(
         { id: 'trash', label: 'Trash (30-day recycle bin)', fns: ['openTrash'] },
+        { id: 'vault', label: 'Encrypted vault', fns: ['openVault'] },
         { id: 'ref', label: 'Reference panel (split view)', fns: ['openRefPanel'] },
         { id: 'publish', label: 'Publish as webpage', fns: ['publishWebpage'] },
+        { id: 'clip', label: 'Web clipper', fns: ['openClipper'] },
         { id: 'import', label: 'Importer (md/csv)', fns: ['openImporter'] }
     );
 } catch (e) {}
@@ -13523,13 +13422,10 @@ setTimeout(() => { try { applyFeatureFlags(); } catch (e) {} }, 500);
     }
     /* keep the shared copy's lock in sync when you lock/unlock */
     const _sv = saveToDb;
-    saveToDb = async function (snap) {
-        /* FIX: remember which note this save is for BEFORE awaiting — after the
-           await the user may already be in a different note. */
-        const forId = (snap && snap.docId) || state.docId;
-        const r = await _sv.apply(this, arguments);
+    saveToDb = async function () {
+        const r = await _sv();
         try {
-            const d = state.docs.find(x => x.id === forId);
+            const d = state.docs.find(x => x.id === state.docId);
             if (d && d.shareId) await db.collection('shared_docs').doc(d.shareId).set({ lockHash: d.lockHash || null, lockSalt: d.lockSalt || null }, { merge: true });
         } catch (e) {}
         return r;
@@ -13904,19 +13800,13 @@ setTimeout(() => { try { applyFeatureFlags(); } catch (e) {} }, 500);
         }
     }
     window.startTour = (key) => {
-        /* FIX: if the tour markup is not present (a feature switch removed it,
-           or it was never injected) this threw — and because it is retried,
-           it threw repeatedly, filling the console and tripping the error
-           boundary. A missing tour is not an error; it just means no tour. */
-        const catcher = $('tour-catch'), card = $('tour-card');
-        if (!catcher || !card) return;
         tKey = key || 'main'; ti = 0;
-        catcher.classList.add('on'); card.classList.add('on');
+        $('tour-catch').classList.add('on'); $('tour-card').classList.add('on');
         if (tKey === 'main' && window.innerWidth < 768) toggleSidebar(true);
         setTimeout(place, 140);
     };
     window.endTour = () => {
-        ['tour-catch', 'tour-card', 'tour-spot'].forEach(i => { const el = $(i); if (el) el.classList.remove('on'); });
+        ['tour-catch', 'tour-card', 'tour-spot'].forEach(i => $(i).classList.remove('on'));
         localStorage.setItem('zdTour_' + tKey, '1');
         if (tKey === 'main' && window.innerWidth < 768) toggleSidebar(false);
     };
@@ -14027,7 +13917,7 @@ setTimeout(() => { try { applyFeatureFlags(); } catch (e) {} }, 500);
     window.addEventListener('keydown', (e) => {
         if (e.altKey && !e.ctrlKey && !e.metaKey && ((e.key || '').toLowerCase() === 'n' || e.code === 'KeyN')) { e.preventDefault(); openQuickCapture(); }
     }, true);
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && ($('qc-modal') || {classList:{contains:function(){return false;}}}).classList.contains('open')) { e.stopPropagation(); if (e.stopImmediatePropagation) e.stopImmediatePropagation(); closeQuickCapture(); } }, true);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('qc-modal').classList.contains('open')) { e.stopPropagation(); if (e.stopImmediatePropagation) e.stopImmediatePropagation(); closeQuickCapture(); } }, true);
     /* ⚡ icon in the sidebar for the capture note */
     const QCSVG = '<svg class="doc-qc qc-bolt" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.3"><path stroke-linecap="round" stroke-linejoin="round" d="M13 2L4.5 13.5H11L10 22l8.5-11.5H12L13 2z"/></svg>';
     const _rd = renderDocs;
@@ -14319,7 +14209,7 @@ setTimeout(() => { try { applyFeatureFlags(); } catch (e) {} }, 500);
         return r;
     };
     document.getElementById('stats-modal').addEventListener('click', e => { if (e.target.id === 'stats-modal') closeStats(); });
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && (document.getElementById('stats-modal') || {classList:{contains:function(){return false;}}}).classList.contains('open')) { e.stopPropagation(); if (e.stopImmediatePropagation) e.stopImmediatePropagation(); closeStats(); } }, true);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && document.getElementById('stats-modal').classList.contains('open')) { e.stopPropagation(); if (e.stopImmediatePropagation) e.stopImmediatePropagation(); closeStats(); } }, true);
     try { zdMenuInject2('stats', 'openStats', 'Writing stats & streak', '<path stroke-linecap="round" stroke-linejoin="round" d="M9 19V9m6 10V5m6 14v-8M3 21h18"/>'); ZD_FEATURES.push({ id: 'stats', label: 'Writing stats & streak', fns: ['openStats'] }); } catch (e) {}
     setTimeout(logDay, 4000);
     setInterval(logDay, 600000);
@@ -14469,7 +14359,7 @@ setTimeout(() => { try { applyFeatureFlags(); } catch (e) {} }, 500);
     /* ---------- F) last-saved confidence ---------- */
     let lastSaved = 0;
     const _sd = window.saveToDb;
-    window.saveToDb = async function () { const r = await _sd.apply(this, arguments); if (!state.dirty) lastSaved = Date.now(); return r; };
+    window.saveToDb = async function () { const r = await _sd(); if (!state.dirty) lastSaved = Date.now(); return r; };
     setInterval(() => {
         if (!lastSaved || state.dirty || state.isGuest || !state.docId) return;
         const el = document.getElementById('save-status');
@@ -14562,112 +14452,33 @@ setTimeout(() => { try { applyFeatureFlags(); } catch (e) {} }, 500);
     let allowClear = false;
     const _clear = quill.history.clear.bind(quill.history);
     quill.history.clear = function () { if (allowClear) return _clear(); };
-    /* Genuine remote replacements must still be able to clear the stack. */
-    window.zdForceHistoryClear = function () { try { _clear(); } catch (e) {} };
 
-    /* ---------- 2. saving that can never lose an edit ----------
-       Three rules make this safe, and every one of them was broken before:
-
-       (a) A save is bound to a SNAPSHOT taken synchronously. It writes to the
-           note that was open when the snapshot was taken — never to whatever
-           note is open when the network finally answers.
-       (b) "Saved" is only claimed for the exact content that was written. The
-           old code re-read the editor AFTER the await and marked THAT clean,
-           which silently threw away anything typed while a save was in
-           flight — including everything typed into the next note you opened.
-       (c) Every edit goes into an on-device journal within ~400ms, long
-           before any network call. A crash, a killed tab or a failed save
-           leaves the journal behind, and it is offered back on next launch.
-    ------------------------------------------------------------------- */
-    const RETRY_BASE = 3000, RETRY_MAX = 60000;
-    const pending = new Map();   /* docId -> {snap, tries, timer} : saves still owed */
-    let journalTimer = null;
-
-    function journalNow() {
-        if (!state.docId || state.isGuest) return;
-        if (document.body.classList.contains('zd-locked')) return;
-        let snap; try { snap = zdCaptureDoc(); } catch (e) { return; }
-        if (!snap.uid || !snap.docId) return;
-        zdJournalPut({ key: zdJournalKey(snap.uid, snap.docId), uid: snap.uid, docId: snap.docId, snap: snap, savedAt: Date.now() });
-    }
-    /* called on every keystroke batch — cheap, debounced, never blocks typing */
-    function journalSoon() {
-        if (journalTimer) clearTimeout(journalTimer);
-        journalTimer = setTimeout(() => { journalTimer = null; journalNow(); }, 400);
-    }
-    window.zdJournalSoon = journalSoon;
-
-    function clearJournal(snap) {
-        if (snap && snap.uid && snap.docId) zdJournalDelete(zdJournalKey(snap.uid, snap.docId));
-    }
-
-    function scheduleRetry(snap) {
-        const key = snap.docId;
-        const rec = pending.get(key) || { tries: 0, timer: null };
-        rec.snap = snap; rec.tries++;
-        if (rec.timer) clearTimeout(rec.timer);
-        const wait = Math.min(RETRY_MAX, RETRY_BASE * Math.pow(2, rec.tries - 1));
-        rec.timer = setTimeout(() => { rec.timer = null; writeSnap(rec.snap, true); }, wait);
-        pending.set(key, rec);
-        if (state.docId === key && !savingNow) pill('err', WARN + '<span>Not saved yet \u2014 retrying\u2026</span>');
-    }
-
-    /* Performs one write of one snapshot and settles all the bookkeeping for
-       exactly that snapshot. Safe to call for a note that is no longer open. */
-    async function writeSnap(snap, isRetry) {
-        if (!snap || !snap.docId || !snap.uid) return false;
-        if (state.deletedIds && state.deletedIds.has(snap.docId)) { pending.delete(snap.docId); clearJournal(snap); return true; }
-        const onScreen = () => state.docId === snap.docId;
-        if (!isRetry) { savingNow = true; if (onScreen()) pill('saving', '<span class="zd-spin"></span><span>Saving\u2026</span>'); }
-        state.lastTypeTime = Date.now();   /* blocks initData's isTyping repaint */
-        try {
-            await saveToDb(snap);
-            /* Confirmed on the server → the journal entry for this note is only
-               safe to drop if nothing NEWER is sitting in it. */
-            const rec = pending.get(snap.docId);
-            if (!rec || rec.snap === snap || rec.snap.at <= snap.at) { pending.delete(snap.docId); clearJournal(snap); }
-            if (onScreen()) {
-                /* Only claim "saved" for content that is still what we wrote. */
-                let live; try { live = computeSaveSig(); } catch (e) { live = null; }
-                if (live === snap.sig) { state.lastSavedSig = snap.sig; state.dirty = false; }
-                else { state.lastSavedSig = snap.sig; triggerSave(); }   /* newer edits → save those too */
-                lastSaved = Date.now(); savingNow = false; showSaved();
-            } else {
-                savingNow = false;
-            }
-            return true;
-        } catch (e) {
-            console.warn('[zd] save failed, will retry', e);
-            savingNow = false;
-            /* The content is already in the journal, so nothing is lost even
-               if this tab dies before the retry lands. */
-            journalNow();
-            scheduleRetry(snap);
-            return false;
-        }
-    }
-    window.zdRetryPending = function () {
-        pending.forEach((rec) => { if (rec.timer) { clearTimeout(rec.timer); rec.timer = null; } if (rec.snap) writeSnap(rec.snap, true); });
-    };
-    window.zdPendingCount = () => pending.size;
-
+    /* ---------- 2. saving that can never trigger a repaint ---------- */
     async function doSave() {
-        if (!state.docId || state.isGuest) return;
-        if (document.body.classList.contains('zd-locked')) return;
-        let snap; try { snap = zdCaptureDoc(); } catch (e) { return; }
-        if (!snap.uid) return;
-        if (snap.sig === state.lastSavedSig && !pending.has(snap.docId)) { state.dirty = false; showSaved(); return; }
-        /* journal FIRST — the write-ahead log must exist before the network call */
-        await zdJournalPut({ key: zdJournalKey(snap.uid, snap.docId), uid: snap.uid, docId: snap.docId, snap: snap, savedAt: Date.now() });
-        if (state.offlineMode) { setStatus('offline', 'Offline \u2014 saved on this device, will sync'); return; }
-        await writeSnap(snap, false);
+        if (!state.docId || state.isGuest || state.offlineMode) return;
+        if (computeSaveSig() === state.lastSavedSig) { state.dirty = false; showSaved(); return; }
+        savingNow = true;
+        pill('saving', '<span class="zd-spin"></span><span>Saving…</span>');
+        state.lastTypeTime = Date.now();          /* blocks initData's isTyping branch */
+        try {
+            await saveToDb();
+            state.lastSavedSig = computeSaveSig(); /* echo now compares equal → no setContents */
+            state.dirty = false;
+            lastSaved = Date.now();
+            savingNow = false;
+            showSaved();
+        } catch (e) {
+            savingNow = false;
+            pill('err', WARN + '<span>Couldn\u2019t save — retrying…</span>');
+            setTimeout(() => { if (state.dirty) doSave(); }, 4000);
+        }
     }
 
     window.triggerSave = function () {
         if (!state.docId || state.isGuest) return;
         if (document.body.classList.contains('zd-locked')) return;
-        /* no real change \u2192 leave the existing Saved/Synced pill untouched */
-        if (computeSaveSig() === state.lastSavedSig && !pending.has(state.docId)) {
+        /* no real change → leave the existing Saved/Synced pill untouched */
+        if (computeSaveSig() === state.lastSavedSig) {
             state.dirty = false;
             if (state.saveTimer) { clearTimeout(state.saveTimer); state.saveTimer = null; }
             firstEdit = 0;
@@ -14675,8 +14486,7 @@ setTimeout(() => { try { applyFeatureFlags(); } catch (e) {} }, 500);
             return;
         }
         state.dirty = true;
-        journalSoon();                       /* crash safety, every single edit */
-        if (state.offlineMode) { setStatus('offline', 'Offline \u2014 saved on this device (Ctrl+S to sync)'); return; }
+        if (state.offlineMode) { setStatus('offline', 'Offline — unsaved edits (Ctrl+S to sync)'); return; }
         if (!firstEdit) firstEdit = Date.now();
         if (state.saveTimer) clearTimeout(state.saveTimer);
         const waited = Date.now() - firstEdit;
@@ -14684,17 +14494,10 @@ setTimeout(() => { try { applyFeatureFlags(); } catch (e) {} }, 500);
             waited >= MAX ? 0 : Math.min(IDLE, MAX - waited));
     };
 
-    /* flush() is called before every note switch and on every way out of the
-       page. It captures synchronously, so the outgoing note's text is safely
-       in hand before anything else is allowed to change. */
     function flush() {
-        if (!state.docId || state.isGuest) return;
+        if (!state.dirty || !state.docId || state.isGuest || state.offlineMode) return;
         if (state.saveTimer) { clearTimeout(state.saveTimer); state.saveTimer = null; }
-        firstEdit = 0;
-        if (!state.dirty && !pending.has(state.docId)) return;
-        journalNow();                        /* synchronous capture, async write */
-        if (state.offlineMode) { setStatus('offline', 'Offline \u2014 saved on this device'); return; }
-        doSave();
+        firstEdit = 0; doSave();
     }
     window.zdFlushSave = flush;
 
@@ -14746,124 +14549,6 @@ setTimeout(() => { try { applyFeatureFlags(); } catch (e) {} }, 500);
             return r;
         };
     }
-
-    /* ---------- 6b. CRASH RECOVERY ----------
-       On launch, compare the journal against what the database actually has.
-       Anything the journal holds that the database never received is an edit
-       that was lost to a crash, a killed tab or a failed save — so offer it
-       back instead of letting it disappear. Nothing is overwritten without
-       an explicit choice. */
-    function zdPlainText(content) {
-        try {
-            if (!content) return '';
-            if (typeof content === 'string') return content;
-            const ops = content.ops || content;
-            if (!Array.isArray(ops)) return '';
-            return ops.map(o => (typeof o.insert === 'string' ? o.insert : ' ')).join('');
-        } catch (e) { return ''; }
-    }
-    function zdRecoveryStyles() {
-        if (document.getElementById('zd-rec-style')) return;
-        document.head.insertAdjacentHTML('beforeend', `<style id="zd-rec-style">
-        #zd-rec{position:fixed;inset:0;z-index:240;display:none;align-items:center;justify-content:center;
-            background:rgba(0,0,0,.55);backdrop-filter:blur(4px);padding:16px;}
-        #zd-rec.open{display:flex;}
-        #zd-rec .box{background:var(--surface-color);border:1px solid var(--border-color);border-radius:16px;
-            width:100%;max-width:520px;max-height:88dvh;display:flex;flex-direction:column;overflow:hidden;
-            box-shadow:0 24px 60px rgba(0,0,0,.4);}
-        #zd-rec h3{font-size:15px;font-weight:800;color:var(--text-color);margin:0;}
-        #zd-rec .hd{padding:16px 18px 12px;border-bottom:1px solid var(--border-color);}
-        #zd-rec .bd{padding:12px 18px;overflow-y:auto;flex:1;min-height:0;}
-        #zd-rec .ft{padding:12px 18px 16px;border-top:1px solid var(--border-color);display:flex;gap:8px;flex-wrap:wrap;}
-        #zd-rec .item{border:1px solid var(--border-color);border-radius:12px;padding:11px 12px;margin-bottom:9px;}
-        #zd-rec .ttl{font-size:12.5px;font-weight:700;color:var(--text-color);word-break:break-word;}
-        #zd-rec .meta{font-size:10px;color:#9ca3af;margin-top:2px;}
-        #zd-rec .prev{font-size:11px;color:var(--text-color);opacity:.8;margin-top:7px;max-height:56px;overflow:hidden;
-            white-space:pre-wrap;word-break:break-word;background:var(--bg-color);border-radius:8px;padding:7px 8px;}
-        #zd-rec button{border-radius:10px;font-size:11.5px;font-weight:700;padding:9px 14px;min-height:40px;cursor:pointer;}
-        #zd-rec .go{background:rgb(var(--accent-rgb));color:#fff;border:0;flex:1;}
-        #zd-rec .no{background:transparent;color:var(--text-color);border:1px solid var(--border-color);}
-        </style>`);
-    }
-    async function zdRunRecovery() {
-        if (!state.user || state.isGuest) return;
-        const uid = state.user.uid;
-        let entries = [];
-        try { entries = await zdJournalAll(); } catch (e) { return; }
-        entries = entries.filter(e => e && e.uid === uid && e.snap && e.snap.docId);
-        if (!entries.length) return;
-
-        const lost = [];
-        for (const e of entries) {
-            const snap = e.snap;
-            /* still open and already clean? nothing was lost */
-            if (state.docId === snap.docId && state.lastSavedSig === snap.sig) { clearJournal(snap); continue; }
-            let serverDoc = null;
-            try { serverDoc = await db.collection('users').doc(uid).collection('docs').doc(snap.docId).get(); }
-            catch (err) { continue; }
-            if (!serverDoc || !serverDoc.exists) { zdJournalDelete(e.key); continue; }  /* note was deleted */
-            const sv = serverDoc.data() || {};
-            const a = zdPlainText(snap.content).trim(), b = zdPlainText(sv.content).trim();
-            const sameTitle = (sv.title || 'Untitled') === snap.title;
-            if (a === b && sameTitle) { zdJournalDelete(e.key); continue; }             /* it did land */
-            /* Only offer it if the journal is genuinely AHEAD of the server. */
-            lost.push({ key: e.key, snap: snap, server: sv, savedAt: e.savedAt || snap.at });
-        }
-        if (!lost.length) return;
-
-        zdRecoveryStyles();
-        if (!document.getElementById('zd-rec')) {
-            document.body.insertAdjacentHTML('beforeend',
-                '<div id="zd-rec" role="dialog" aria-modal="true" aria-labelledby="zd-rec-h"><div class="box">' +
-                '<div class="hd"><h3 id="zd-rec-h">Unsaved work recovered</h3>' +
-                '<div style="font-size:11px;color:#9ca3af;margin-top:4px;">ZenDocz found edits on this device that never reached your notes — probably from a crash or a lost connection.</div></div>' +
-                '<div class="bd" id="zd-rec-list"></div>' +
-                '<div class="ft"><button class="go" id="zd-rec-all">Restore all</button>' +
-                '<button class="no" id="zd-rec-skip">Keep saved versions</button></div></div></div>');
-        }
-        const list = document.getElementById('zd-rec-list');
-        list.innerHTML = '';
-        lost.forEach((L, i) => {
-            const when = new Date(L.savedAt).toLocaleString();
-            const prev = zdPlainText(L.snap.content).trim().slice(0, 240) || '(empty)';
-            const div = document.createElement('div');
-            div.className = 'item';
-            div.innerHTML = '<div class="ttl"></div><div class="meta"></div><div class="prev"></div>';
-            div.querySelector('.ttl').textContent = L.snap.title || 'Untitled';
-            div.querySelector('.meta').textContent = 'Edited ' + when + ' · not saved to your notes';
-            div.querySelector('.prev').textContent = prev;
-            list.appendChild(div);
-        });
-        document.getElementById('zd-rec').classList.add('open');
-
-        const close = () => { const m = document.getElementById('zd-rec'); if (m) m.classList.remove('open'); };
-        document.getElementById('zd-rec-all').onclick = async () => {
-            let ok = 0;
-            for (const L of lost) {
-                try { await zdWriteSnapshot(L.snap); zdJournalDelete(L.key); ok++; } catch (e) { console.warn('[zd] recovery write failed', e); }
-            }
-            close();
-            showToast(ok ? ('\u2713 Restored ' + ok + (ok === 1 ? ' note.' : ' notes.')) : 'Could not restore — your notes were left untouched.');
-            if (ok && state.docId) { const d = state.docs.find(x => x.id === state.docId); if (d) setTimeout(() => { try { openDoc(d.id, d); } catch (e) {} }, 400); }
-        };
-        document.getElementById('zd-rec-skip').onclick = async () => {
-            /* Never silently destroy the recovered text: park it in Trash so it
-               is still retrievable for 30 days. */
-            for (const L of lost) {
-                try {
-                    await trashRef().add(JSON.parse(JSON.stringify({
-                        title: (L.snap.title || 'Untitled') + ' (unsaved copy)', content: L.snap.content,
-                        isFavorite: false, folderId: L.snap.folderId || null, comments: L.snap.comments || {},
-                        kanban: null, eis: null, eisDue: null, eisDone: false, trashedAt: Date.now()
-                    })));
-                } catch (e) {}
-                zdJournalDelete(L.key);
-            }
-            close();
-            showToast('Kept your saved versions — the unsaved copies are in Trash.');
-        };
-    }
-    window.zdRunRecovery = zdRunRecovery;
 
     /* ---------- 7. keep the "Saved N min ago" text fresh ---------- */
     setInterval(() => { if (!state.dirty && !savingNow && !state.offlineMode && state.docId && !state.isGuest && els.status.className === 'zd-saved') showSaved(); }, 30000);
@@ -14972,7 +14657,7 @@ setTimeout(() => { try { applyFeatureFlags(); } catch (e) {} }, 500);
     const _od = window.openDoc;
     window.openDoc = function (id, data) { zdClearDup(); const r = _od(id, data); setTimeout(zdClearDup, 80); return r; };
     els.docList.addEventListener('click', () => setTimeout(zdClearDup, 60), true);
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && ($('dup-hint') || {classList:{contains:function(){return false;}}}).classList.contains('on')) { e.stopPropagation(); if (e.stopImmediatePropagation) e.stopImmediatePropagation(); hideHint(); } }, true);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('dup-hint').classList.contains('on')) { e.stopPropagation(); if (e.stopImmediatePropagation) e.stopImmediatePropagation(); hideHint(); } }, true);
 
     /* ---------- LIVE "Recent" SORT ---------- */
     const wc = d => { const x = docPlainText(d).trim(); return x ? x.split(/\s+/).length : 0; };
@@ -14991,12 +14676,9 @@ setTimeout(() => { try { applyFeatureFlags(); } catch (e) {} }, 500);
     };
     /* re-render the list shortly after each save so "Recent" reorders live */
     const _sd = window.saveToDb;
-    window.saveToDb = async function (snap) {
-        /* FIX: bump the note that was ACTUALLY saved, not whichever note is
-           open by the time the write resolves. */
-        const forId = (snap && snap.docId) || state.docId;
+    window.saveToDb = async function () {
         const r = await _sd.apply(this, arguments);
-        const d = state.docs.find(x => x.id === forId);
+        const d = state.docs.find(x => x.id === state.docId);
         if (d) d.updatedAt = { toDate: () => new Date(), seconds: Math.floor(Date.now() / 1000) };
         setTimeout(() => { try { renderDocs(); } catch (e) {} }, 60);
         return r;
@@ -15028,12 +14710,25 @@ setTimeout(() => { try { applyFeatureFlags(); } catch (e) {} }, 500);
     ['canvas-modal', 'templates-modal'].forEach(id => { const m = document.getElementById(id); if (m) { delete m.dataset.zd59b; delete m.dataset.zd60; } });
 
     document.head.insertAdjacentHTML('beforeend', `<style>
-    /* ================= A) VIEW HEADER — SHARED PARTS =================
-       V6.0's grid header lived here and was replaced outright by V6.1's flex
-       header further down ("Undo V6.0's global grid header"), so the ~20 dead
-       rules have been removed. The .zdvh-mid child rule below has no V6.1
-       counterpart, so it stays. */
+    /* ================= A) UNIFIED VIEW HEADER ================= */
+    .zd-view-head{display:grid!important;grid-template-columns:auto 1fr auto;align-items:center;gap:8px;
+        min-height:54px;padding:8px 10px!important;flex-wrap:nowrap!important;}
+    .zdvh-l,.zdvh-r{display:flex;align-items:center;gap:4px;flex-shrink:0;}
+    .zdvh-r{justify-content:flex-end;}
+    .zdvh-mid{min-width:0;display:flex;align-items:center;justify-content:center;gap:7px;text-align:center;}
     .zdvh-mid > span{min-width:0;}
+    .zdvh-title{font-size:13px;font-weight:800;color:var(--text-color);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .zdvh-sub{display:none;font-size:9.5px;color:#9ca3af;font-weight:600;}
+    @media (min-width:1000px){.zdvh-sub{display:block;}}
+    .zdvh-b{width:30px;height:30px;flex-shrink:0;border-radius:99px;display:inline-flex;align-items:center;justify-content:center;
+        color:#9ca3af;transition:all .16s ease;}
+    .zdvh-b svg{width:16px;height:16px;}
+    .zdvh-b:hover{color:rgb(var(--accent-rgb));background:rgb(var(--accent-rgb) / .13);transform:scale(1.07);}
+    .zdvh-b:active{transform:scale(.9);}
+    .zdvh-x{width:32px;height:32px;flex-shrink:0;border-radius:99px;display:flex;align-items:center;justify-content:center;
+        font-size:21px;line-height:1;color:#9ca3af;transition:all .16s ease;}
+    .zdvh-x:hover{color:#d93025;background:rgba(217,48,37,.11);}
+    .zdvh-x:active{transform:scale(.88);}
     /* tool row under the header (canvas / templates) */
     .zdvh-tools{display:flex;flex-wrap:wrap;gap:6px;width:100%;padding:0 12px 9px;background:var(--surface-color);
         border-bottom:1px solid var(--border-color);}
@@ -15074,16 +14769,28 @@ setTimeout(() => { try { applyFeatureFlags(); } catch (e) {} }, 500);
     #add-note-btn-wrapper{padding:10px 12px!important;}
     #add-note-btn-wrapper button{border-radius:13px!important;}
 
-    /* ================= E) ROUNDING — SURVIVING RULES =================
-       V6.1's "5) ROUNDING — dialled back" restates every radius that was here
-       with smaller values and wins on source order, so those ~18 rules were
-       dead weight. Only the ones V6.1 never mentions are kept. */
-    .ql-editor blockquote{padding-top:2px;padding-bottom:2px;}   /* radius comes from V6.1 */
+    /* ================= E) ROUNDED POLISH ================= */
+    #ruler{border-radius:10px!important;}
+    #toolbar.ql-toolbar{border-radius:32px;}
+    .zd-tool,#toolbar .ql-formats button{border-radius:9px!important;}
+    .zd-size input{border-radius:9px!important;}
+    .ql-editor pre.ql-syntax{border-radius:12px;}
+    .ql-editor blockquote{border-radius:0 10px 10px 0;padding-top:2px;padding-bottom:2px;}
+    .ql-editor img{border-radius:10px;}
+    #paper-container{border-radius:10px!important;}
+    @media (max-width:850px){#paper-container{border-radius:0!important;}}
+    .ql-picker-options{border-radius:14px!important;}
+    .ql-picker-label{border-radius:9px!important;}
+    select,input[type=text],input[type=email],input[type=password],input[type=date],input[type=datetime-local],input[type=number],textarea{border-radius:11px;}
+    .zd-stat,.cm-row,.eis-row,.zd44-row,.kb-card,.cv-card{border-radius:14px;}
+    .doc-row{border-radius:11px!important;}
+    #cm-dir,#cm-sort,#cm-search{border-radius:12px!important;}
+    .zd-view-btn{border-radius:12px!important;}
     #save-status,#word-count{border-radius:8px;}
     .zd-mi{border-radius:9px;margin:0 4px;}
     .ql-editor table td,.ql-editor table th{border-radius:4px;}
     #graph-canvas{border-radius:0;}
-    .zda-btn{border-radius:12px;}
+    button,.gv-cta,.zda-btn{border-radius:12px;}
     .zdvh-b,.zdvh-x,.eis-check,.cm-ib,.zd44-ib{border-radius:99px!important;}
     </style>`);
 
@@ -15273,16 +14980,8 @@ setTimeout(() => { try { applyFeatureFlags(); } catch (e) {} }, 500);
         b.onclick = () => { closeMentions(); openDoc(d.id, d); };
         return b;
     }
-    const _mentModal = document.getElementById('ment-modal');
-    if (_mentModal) _mentModal.addEventListener('click', e => { if (e.target.id === 'ment-modal') closeMentions(); });
-    /* FIX: a later layer retires this modal and removes the element, but this
-       document-level handler survived it — so every Escape keypress threw
-       "Cannot read properties of null". */
-    document.addEventListener('keydown', (e) => {
-        if (e.key !== 'Escape') return;
-        const m = document.getElementById('ment-modal');
-        if (m && m.classList.contains('open')) { e.stopPropagation(); if (e.stopImmediatePropagation) e.stopImmediatePropagation(); closeMentions(); }
-    }, true);
+    document.getElementById('ment-modal').addEventListener('click', e => { if (e.target.id === 'ment-modal') closeMentions(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && document.getElementById('ment-modal').classList.contains('open')) { e.stopPropagation(); if (e.stopImmediatePropagation) e.stopImmediatePropagation(); closeMentions(); } }, true);
     try {
         zdMenuInject2('mentions', 'openMentions', 'Linked & unlinked mentions', '<path stroke-linecap="round" stroke-linejoin="round" d="M13.8 10.2a4 4 0 010 5.7l-3 3a4 4 0 11-5.6-5.7l1.5-1.5M10.2 13.8a4 4 0 010-5.7l3-3a4 4 0 115.6 5.7l-1.5 1.5"/>');
         ZD_FEATURES.push({ id: 'mentions', label: 'Linked & unlinked mentions', fns: ['openMentions'] });
@@ -15414,9 +15113,15 @@ setTimeout(() => { try { applyFeatureFlags(); } catch (e) {} }, 500);
     .zd-cmodal-box{border-radius:14px!important;}
     #cm-box{border-radius:12px!important;}
 
-    /* ============ 6) SIDEBAR VIEWS ROW ============
-       V6.1's grid version that lived here is superseded by V6.2's flex
-       version ("1) VIEWS ROW"), so the grid rules were removed. */
+    /* ============ 6) SIDEBAR VIEWS ROW — flush, opaque, 2 rows ============ */
+    #views-row{position:sticky!important;top:0!important;z-index:35!important;
+        margin:-0.75rem -0.75rem 10px!important;padding:0.75rem 0.75rem 9px!important;
+        background:#1e1e1e;box-shadow:0 8px 10px -8px rgba(0,0,0,.55);}
+    html:not(.dark) #views-row{background:#f7f2e7;box-shadow:0 8px 10px -8px rgba(120,100,60,.3);}
+    #views-row > div{display:grid!important;grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:5px!important;}
+    #views-row .zd-view-btn{flex:none!important;min-width:0;padding:8px 2px;overflow:hidden;}
+    #views-row .zd-view-btn svg{flex-shrink:0;}
+    #views-row .zd-view-btn span{font-size:8.5px;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
     </style>`);
 
     /* ============================================================
@@ -17180,10 +16885,7 @@ window.zdScrollToNode = function (node) {
     document.addEventListener('keydown', e => {
         if (e.key !== 'Escape') return;
         for (const [id, fn] of [['tl-modal', 'closeTimeline'], ['dr-modal', 'closeDaily']]) {
-            /* FIX: dr-modal is torn down and rebuilt by a later layer, so this
-               threw on every Escape once the original element was gone. */
-            const _el = $(id);
-            if (_el && _el.classList.contains('open') && typeof window[fn] === 'function') {
+            if ($(id).classList.contains('open')) {
                 e.stopPropagation(); if (e.stopImmediatePropagation) e.stopImmediatePropagation();
                 window[fn](); return;
             }
@@ -17313,23 +17015,13 @@ window.zdScrollToNode = function (node) {
         $('vc-txt').scrollTop = $('vc-txt').scrollHeight;
     }
 
-    let levelGen = 0;
     async function levels() {
         /* the level meter opens a SECOND mic stream, which breaks
            SpeechRecognition on Android/many devices — only run it on
            desktop, and never let a failure affect recognition */
         if (window.innerWidth < 900 || !navigator.mediaDevices) return;
-        /* FIX: recognition restarts itself roughly every minute, so this ran
-           again and again. A getUserMedia() that resolved after the meter had
-           already been torn down overwrote the reference to the live stream,
-           orphaning it — the microphone stayed open, and the browser's
-           recording indicator stayed lit, for the rest of the session. */
-        const gen = ++levelGen;
-        if (micStream) { try { micStream.getTracks().forEach(t => t.stop()); } catch (e) {} micStream = null; }
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            if (gen !== levelGen || !listening) { stream.getTracks().forEach(t => t.stop()); return; }
-            micStream = stream;
+            micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             if (audioCtx.state === 'suspended') await audioCtx.resume();
             analyser = audioCtx.createAnalyser();
@@ -17350,7 +17042,6 @@ window.zdScrollToNode = function (node) {
         } catch (e) { /* meter is cosmetic — recognition continues without it */ }
     }
     function stopLevels() {
-        levelGen++;                       /* invalidates any in-flight acquisition */
         if (rafId) cancelAnimationFrame(rafId); rafId = null;
         Array.from($('vc-bars').children).forEach(b => b.style.height = '4px');
         try { if (micStream) micStream.getTracks().forEach(t => t.stop()); } catch (e) {}
@@ -22564,11 +22255,7 @@ window.zdScrollToNode = function (node) {
     }
     setTimeout(() => { if (on()) { const c = cache(); if (c && !c.fallback) { W = c; paint(); } refresh(true); } else { sample(); tint(null); } }, 800);
     setInterval(tick, 60000);
-    /* V10.5 (further down) is the single fetcher now — it polls, and pushes
-       what it gets here via zdWxTest('__sync'). Two modules independently
-       polling geolocation and three weather APIs forever was doubling the
-       network and location traffic for one backdrop. */
-    setInterval(() => { if (on() && !W) { try { const c = cache(); if (c) { W = c; paint(); } } catch (e) {} } }, RETRY);
+    setInterval(() => { if (on() && (!W || W.fallback)) refresh(true); }, RETRY);
     setInterval(autoTheme, AT_CHECK);
     setInterval(placeOrb, 30000);
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { fit(); tick(); } });
@@ -22614,19 +22301,6 @@ window.zdScrollToNode = function (node) {
     window.zdWxTest = function (kind) {
         const codes = { clear:0, partly:2, overcast:3, fog:45, drizzle:53, rain:63, snow:73, storm:95 };
         if (!W) sample();
-        /* FIX: the V10.5 accuracy module signalled '__sync' after every fetch,
-           but nothing here handled it — so its more accurate reading only ever
-           reached localStorage and the screen kept showing the older, less
-           accurate one, while both modules polled independently. */
-        if (kind === '__sync') {
-            try {
-                const fresh = JSON.parse(localStorage.getItem('zdWx') || 'null');
-                if (fresh && typeof fresh.temp === 'number') W = fresh;
-            } catch (e) {}
-            paint(); mood();
-            try { autoTheme(); } catch (e) {}
-            return;
-        }
         if (kind === 'night') W.isDay = false;
         else if (kind === 'day') W.isDay = true;
         else if (codes[kind] !== undefined) W.code = codes[kind];
@@ -22903,31 +22577,6 @@ window.zdScrollToNode = function (node) {
     }
     window.zdWxRefresh = () => refresh(false);
 
-    /* PRIVACY: this is a private notes app, and the weather backdrop used to
-       request precise GPS and — failing that — post the user's IP to two
-       third-party lookup services, automatically, before they had done
-       anything. It is now off until they say yes once. Everything else about
-       the feature is unchanged, and declining leaves the rest of the app
-       completely unaffected. */
-    function wxConsent() { return localStorage.getItem('zdWxGeoOk'); }
-    window.zdWxAskLocation = async function () {
-        if (wxConsent() === '1') return true;
-        let ok = false;
-        try {
-            ok = await zdConfirm(
-                'To show live weather, ZenDocz needs your approximate location. It is sent to open-meteo.com (and, if GPS is unavailable, to an IP lookup service) purely to fetch the forecast — never to us, and never with your notes.',
-                { title: 'Use your location for weather?', okText: 'Allow' });
-        } catch (e) { ok = false; }
-        localStorage.setItem('zdWxGeoOk', ok ? '1' : '0');
-        if (ok) refresh(true);
-        return ok;
-    };
-    const _refresh105 = refresh;   /* hoisted function declaration — reassignable */
-    refresh = function (force) {
-        if (wxConsent() !== '1') { log('location not approved yet — skipping'); return; }
-        return _refresh105.apply(this, arguments);
-    };
-
     /* keep it genuinely fresh */
     setTimeout(() => refresh(true), 1800);
     setInterval(() => refresh(true), 8 * 60 * 1000);
@@ -22956,19 +22605,10 @@ window.zdScrollToNode = function (node) {
     if (typeof _open === 'function') {
         window.wxOpen = function () {
             const r = _open.apply(this, arguments);
-            /* Opening the weather panel is the natural moment to ask, since
-               it is the only place the answer matters. */
-            if (localStorage.getItem('zdWxGeoOk') === null) setTimeout(() => { try { zdWxAskLocation(); } catch (e) {} }, 350);
             setTimeout(() => {
                 const note = $('wx-note');
                 let w = null; try { w = JSON.parse(localStorage.getItem('zdWx') || 'null'); } catch (e) {}
-                if (!note) return;
-                if (localStorage.getItem('zdWxGeoOk') !== '1') {
-                    note.innerHTML = 'Location not enabled — showing a sample sky. ' +
-                        '<button onclick="zdWxAskLocation()" style="color:rgb(var(--accent-rgb));font-weight:700;text-decoration:underline;">Use my location</button>';
-                    return;
-                }
-                if (!w) return;
+                if (!note || !w) return;
                 const label = w.fallback ? 'Sample sky — no location available'
                     : w.src === 'ip' ? 'Approximate location (network) · allow location for exact conditions'
                     : w.src === 'cached' ? 'Last known location'
@@ -23002,263 +22642,12 @@ window.zdScrollToNode = function (node) {
     /* ============================================================
        INIT
     ============================================================ */
-    /* Each step is isolated: one failing restore (theme, sidebar, accent…)
-       must never stop the others from running, which is what happened
-       before — a single throw here left the app half-initialised. */
-    [
-        ['theme', initTheme],
-        ['sidebar', initDesktopSidebar],
-        ['toolbar position', initToolbarPosition],
-        ['sidebar sections', initSections],   /* V3.4 */
-        ['search worker', initSearchWorker],  /* V3.6 */
-        ['accent colour', initAccent]         /* V3.4 */
-    ].forEach(([what, fn]) => {
-        try { fn(); } catch (e) { console.error('[zd] could not restore ' + what, e); }
-    });
-
-    /* ============================================================
-       V11 — RESPONSIVE & PRODUCTION POLISH
-       Injected last on purpose: it is the final layer of the cascade, so it
-       settles the disagreements between the ~40 earlier patch layers without
-       having to delete any of them. Everything here is a layout or
-       accessibility correction — no feature behaviour changes.
-    ============================================================ */
-    document.head.insertAdjacentHTML('beforeend', `<style id="zd-v11">
-    /* ---- 1. off-canvas panels ----
-       #ref-pane (350px) and #dt-pane (290px) parked themselves off-screen with
-       right:-360px / right:-300px. That is wider than a phone, so opening one
-       pushed content off the left edge, and even closed they stretched the
-       document. Translating instead of offsetting keeps them out of layout
-       entirely, and they now cap to the screen like #comments-panel already did. */
-    #ref-pane, #dt-pane { right: 0 !important; transform: translateX(105%); will-change: transform;
-        transition: transform .28s cubic-bezier(.22,1,.36,1) !important; max-width: 100vw !important; }
-    #ref-pane.open, #dt-pane.open { transform: translateX(0); }
-    @media (max-width: 860px) {
-        #ref-pane { width: min(88vw, 340px) !important; }
-        #dt-pane  { width: min(88vw, 320px) !important; }
-    }
-
-    /* ---- 2. nothing may scroll the page sideways ----
-       overflow-x:hidden still creates a scroll container, so the page could
-       genuinely be dragged sideways by 10–45px on every screen size.
-       overflow-x:clip refuses to scroll at all; hidden stays as the fallback
-       for older browsers. */
-    html { overflow-x: hidden; overflow-x: clip; }
-    body { overflow-x: hidden !important; overflow-x: clip !important; max-width: 100vw; }
-    /* The splash screen animates out to scale(1.07) and stays there, leaving a
-       permanently oversized layer behind the app. */
-    #loading-screen { contain: layout paint; }
-    /* The splash's own stylesheet lives in <body>, so it beats anything
-       appended to <head>. Two classes outrank its one. */
-    #loading-screen.hidden.zd-gone, html #loading-screen.zd-gone { display: none !important; }
-    #ref-pane:not(.open), #dt-pane:not(.open) { visibility: hidden; pointer-events: none; }
-
-    /* ---- 3. dynamic viewport height ----
-       Static vh is taller than the visible area while the mobile address bar
-       is showing, which made the page jump as the bar hid and reappeared. */
-    @media (max-width: 850px) { #paper-container { min-height: 100dvh !important; } }
-    .zd-cmodal-box { max-height: 88dvh !important; }
-    .zd-view-modal, #trk-modal { height: 100dvh !important; max-height: 100dvh !important; }
-
-    /* ---- 3b. the desktop sidebar must not depend on stylesheet order ----
-       .sidebar-closed's translateX(-100%) and Tailwind's md:transform-none
-       have identical specificity, so which one wins
-       depends on whether the Tailwind CDN has injected its stylesheet yet.
-       On a slow connection the sidebar could start the session hidden on a
-       desktop. Settle it explicitly. */
-    @media (min-width: 768px) {
-        #sidebar:not(.collapsed) { transform: none !important; }
-        #sidebar.collapsed { transform: none !important; width: 0 !important; min-width: 0 !important; overflow: hidden !important; }
-    }
-
-    /* ---- 4. the 768–850px dead band ----
-       Tailwind's md: switches at 768px but the app's own CSS switches at 850px,
-       so between the two the ruler shell kept its hard-coded 794px width next
-       to a still-expanded sidebar and squeezed the page. */
-    @media (max-width: 900px) { #ruler-wrap { width: 100% !important; max-width: 100% !important; } }
-    @media (max-width: 850px) { #ruler-wrap { display: none !important; } }
-
-    /* ---- 5. foldables ----
-       Galaxy Fold's cover screen is 280 CSS px. Nothing in the app went below
-       360px, so grids with a fixed minimum track forced sideways scrolling. */
-    @media (max-width: 400px) {
-        #trk-grid { grid-template-columns: 1fr !important; }
-        .kb-col { width: min(86vw, 280px) !important; min-width: 0 !important; }
-        .mt-kpi, .zd-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
-        #paper-container, .ql-editor { padding-left: 12px !important; padding-right: 12px !important; }
-        .zdvh-sub, .zd-hide-xs { display: none !important; }
-    }
-    @media (max-width: 340px) {
-        .mt-kpi, .zd-stat-grid { grid-template-columns: 1fr !important; }
-        #views-row > div { flex-wrap: wrap !important; }
-        /* On a Fold cover screen the title had about 60px left. The star,
-           info and folder controls all live in the overflow menu too, so at
-           this width the title gets their space instead. */
-        #header-fav-btn, #header-info-btn, #m-folder-btn, #folder-dd-btn { display: none !important; }
-        #doc-title { min-width: 96px !important; font-size: 14px !important; }
-        .zd-header { padding-left: 4px !important; padding-right: 4px !important; gap: 2px !important; }
-    }
-    /* Dual-screen / hinged devices: keep dialogs on one physical panel. */
-    @media (horizontal-viewport-segments: 2) {
-        .zd-cmodal-box, #zd-rec .box, #confirm-modal > div {
-            max-width: env(viewport-segment-width 0 0, 48vw) !important;
-            margin-left: 0 !important;
-        }
-    }
-    @media (vertical-viewport-segments: 2) {
-        .zd-cmodal-box, #zd-rec .box { max-height: env(viewport-segment-height 0 0, 44dvh) !important; }
-    }
-
-    /* ---- 6. notch / home-indicator safe areas ----
-       viewport-fit=cover is now set, so these finally resolve. Without the top
-       and left insets the sidebar close button and the header hamburger sat
-       underneath the status bar in installed (standalone) mode. */
-    @media (max-width: 900px) {
-        .zd-header, #app > header { padding-top: env(safe-area-inset-top, 0px) !important; }
-        #sidebar { padding-top: env(safe-area-inset-top, 0px) !important;
-                   padding-left: env(safe-area-inset-left, 0px) !important; }
-        #comments-panel, #ref-pane, #dt-pane { padding-top: env(safe-area-inset-top, 0px) !important;
-                   padding-bottom: env(safe-area-inset-bottom, 0px) !important; }
-    }
-
-    /* ---- 7. touch targets ----
-       Most icon buttons were 26–32px. 40px is the practical floor for a thumb;
-       the visual size is preserved and the hit area is grown around it. */
-    @media (pointer: coarse) {
-        #header-fav-btn, #header-info-btn, .accent-swatch, .zdvh-b, .zd-help-b,
-        .zdvh-x, .trk-b, .trk-x, .zd44-ib, .zd-tool {
-            position: relative;
-        }
-        #header-fav-btn::after, #header-info-btn::after, .zdvh-b::after, .zd-help-b::after,
-        .zdvh-x::after, .trk-b::after, .trk-x::after, .zd44-ib::after, .zd-tool::after {
-            content: ''; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
-            width: max(100%, 40px); height: max(100%, 40px);
-        }
-        #ruler .handle { min-width: 22px !important; }
-    }
-
-    /* ---- 8. iOS focus zoom ----
-       Replaces what user-scalable=no was doing, without disabling pinch-zoom. */
-    @media (max-width: 900px) {
-        input, select, textarea { font-size: max(16px, 1em); }
-        input[type=checkbox], input[type=radio], input[type=range], input[type=color] { font-size: inherit; }
-    }
-
-    /* ---- 9. long unbroken strings must wrap, not widen the page ---- */
-    .ql-editor, .doc-row, .zd-cmodal-box, .kb-card, .cv-card, #zd-rec .prev {
-        overflow-wrap: anywhere; word-break: break-word;
-    }
-    .zd-scroll-x { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-
-    /* ---- 10. landscape phones ---- */
-    @media (max-height: 430px) and (orientation: landscape) {
-        .zd-cmodal-box, #zd-rec .box { max-height: 94dvh !important; }
-        #toolbar.ql-toolbar { padding-top: 2px !important; padding-bottom: 2px !important; }
-        .zd-hide-short { display: none !important; }
-    }
-
-    /* ---- 11. respect reduced motion ---- */
-    @media (prefers-reduced-motion: reduce) {
-        *, *::before, *::after {
-            animation-duration: .001ms !important; animation-iteration-count: 1 !important;
-            transition-duration: .001ms !important; scroll-behavior: auto !important;
-        }
-    }
-
-    /* ---- 12. visible keyboard focus (was suppressed app-wide) ----
-       :where() keeps specificity at zero so any element that already styles
-       its own focus still wins; the borderless title and the editor body opt
-       out entirely, since a ring around them covers the status line. */
-    :where(button, a[href], [role="button"], summary, [tabindex]:not([tabindex="-1"])):focus-visible {
-        outline: 2px solid rgb(var(--accent-rgb)); outline-offset: 2px; border-radius: 6px;
-    }
-    :where(input, select, textarea):focus-visible { outline: 2px solid rgb(var(--accent-rgb)); outline-offset: -2px; }
-    #doc-title:focus-visible, #doc-title:focus, .ql-editor:focus-visible, .ql-editor:focus,
-    [contenteditable]:focus-visible, [contenteditable]:focus { outline: none !important; }
-
-    /* ---- 13. printing ---- */
-    @media print {
-        #sidebar, .zd-header, #toolbar, #ruler-wrap, #views-row, #comments-panel,
-        #ref-pane, #dt-pane, .zd-fab, #canvas-fab, #trk-fab, #pomo-pill, #toast { display: none !important; }
-        #paper-container { width: 100% !important; box-shadow: none !important; border: 0 !important; }
-        body, html { height: auto !important; overflow: visible !important; }
-    }
-    </style>`);
-
-    /* Take the splash screen out of the layout once it has finished fading,
-       instead of leaving a scaled-up ghost behind the app forever. */
-    (function zdRetireSplash() {
-        const ls = document.getElementById('loading-screen');
-        if (!ls) return;
-        const retire = () => { if (ls.classList.contains('hidden')) ls.classList.add('zd-gone'); };
-        ls.addEventListener('animationend', retire);
-        try {
-            new MutationObserver(() => {
-                if (ls.classList.contains('hidden')) setTimeout(retire, 800);
-                else ls.classList.remove('zd-gone');
-            }).observe(ls, { attributes: true, attributeFilter: ['class'] });
-        } catch (e) {}
-        setTimeout(retire, 9000);   /* belt and braces */
-    })();
-
-    /* Keep the browser theme-colour honest when the app theme changes, so the
-       status bar on installed phones matches the app instead of always dark. */
-    (function zdThemeColor() {
-        const meta = document.querySelector('meta[name="theme-color"]');
-        if (!meta) return;
-        const sync = () => {
-            const dark = document.documentElement.classList.contains('dark');
-            meta.setAttribute('content', dark ? '#191919' : '#ffffff');
-        };
-        sync();
-        try { new MutationObserver(sync).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] }); }
-        catch (e) {}
-    })();
-
-    /* ============================================================
-       ERROR BOUNDARY
-       One broken feature must never take the whole app down with it, and
-       must never stop a note from saving. Uncaught errors are logged, shown
-       once, and the editor is verified to still be alive afterwards.
-    ============================================================ */
-    (function zdErrorBoundary() {
-        if (window.__zdBoundary) return; window.__zdBoundary = true;
-        const seen = new Set();
-        let shown = 0;
-        function record(kind, err) {
-            const msg = (err && (err.message || err.reason || err)) + '';
-            const key = kind + '|' + msg.slice(0, 160);
-            if (seen.has(key)) return false;
-            seen.add(key);
-            console.error('[zd:' + kind + ']', err);
-            try {
-                const log = JSON.parse(localStorage.getItem('zdErrLog') || '[]');
-                log.push({ t: Date.now(), kind: kind, msg: msg.slice(0, 400) });
-                localStorage.setItem('zdErrLog', JSON.stringify(log.slice(-30)));
-            } catch (e) {}
-            return true;
-        }
-        function recover() {
-            /* Make sure nothing was left in a state that blocks saving. */
-            try {
-                if (typeof quill !== 'undefined' && quill && state && state.docId && !state.isGuest
-                    && !document.body.classList.contains('zd-locked') && !quill.isEnabled()) quill.enable();
-            } catch (e) {}
-            try { if (window.zdJournalSoon) zdJournalSoon(); } catch (e) {}
-        }
-        window.addEventListener('error', (e) => {
-            if (e && e.target && e.target !== window && e.target.tagName) return; /* asset 404s */
-            if (!record('error', e.error || e.message)) return;
-            recover();
-            if (shown++ < 2) { try { showToast('Something went wrong in one feature — your notes are safe and still saving.'); } catch (err) {} }
-        });
-        window.addEventListener('unhandledrejection', (e) => {
-            if (!record('promise', e && e.reason)) return;
-            recover();
-            if (shown++ < 2) { try { showToast('A background task failed — your notes are safe and still saving.'); } catch (err) {} }
-        });
-        window.zdErrorLog = () => { try { return JSON.parse(localStorage.getItem('zdErrLog') || '[]'); } catch (e) { return []; } };
-    })();
+    initTheme();
+    initDesktopSidebar();
+    initToolbarPosition();
+    initSections();  /* V3.4: restore collapsed sidebar sections */
+    initSearchWorker(); /* V3.6: off-thread palette search */
+    initAccent();    /* V3.4: restore accent color */
     </script>
 </body>
 </html>
